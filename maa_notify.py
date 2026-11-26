@@ -1737,6 +1737,22 @@ def send_notification(
         body["timestamp"] = timestamp
         body["sign"] = base64.b64encode(digest).decode("utf-8")
 
+    if provider == "bark":
+        parsed = urllib.parse.urlparse(webhook)
+        path = parsed.path.rstrip("/")
+        if path.endswith("/push"):
+            if not secret:
+                raise NotifyError("Bark 使用 /push 地址时，请把 device key 填到 secret")
+            body["device_key"] = secret
+        else:
+            key = path.split("/")[-1] if path else ""
+            if not key:
+                raise NotifyError("Bark Webhook 应包含 device key")
+            body["device_key"] = key
+            webhook = urllib.parse.urlunparse(
+                (parsed.scheme, parsed.netloc, "/push", "", "", "")
+            )
+
     if provider == "dingtalk" and secret:
         timestamp = str(int(time.time() * 1000))
         string_to_sign = "%s\n%s" % (timestamp, secret)
