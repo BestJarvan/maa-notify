@@ -81,7 +81,7 @@ struct SettingsActions {
     let save: () -> Void
     let test: () -> Void
     let chooseFolder: () -> Void
-    let useDefaultFolder: () -> Void
+    let applyFolder: () -> Void
     let readMAA: () -> Void
     let syncMAA: () -> Void
     let refreshSchedule: () -> Void
@@ -287,27 +287,22 @@ struct SettingsView: View {
 
     private var maaCard: some View {
         card("MAA 目录") {
-            Text("默认目录：\(kDefaultMaaDataPath)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            Text(model.folderPath.isEmpty ? "尚未选择" : model.folderPath)
+            TextField("MAA Data 目录", text: $model.folderPath)
+                .textFieldStyle(.roundedBorder)
                 .font(.caption)
-                .textSelection(.enabled)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
             HStack {
-                Button("使用默认目录…") { actions.useDefaultFolder() }
-                Button("选择其他目录…") { actions.chooseFolder() }
+                Button("选择…") { actions.chooseFolder() }
+                Button("应用目录") { actions.applyFolder() }
                 Button("打开目录") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: model.folderPath))
+                    let path = NSString(string: model.folderPath).expandingTildeInPath
+                    NSWorkspace.shared.open(URL(fileURLWithPath: path))
                 }
                 .disabled(model.folderPath.isEmpty)
                 Spacer()
                 Button("启动 MAA") { actions.startMAA() }
                 Button("退出 MAA") { actions.quitMAA() }
             }
-            Text("系统会弹出选择框让你授权；默认位置只是初始目录，可选择任意其他 MAA Data 目录。")
+            Text("默认 \(kDefaultMaaDataPath)，可直接修改路径后点“应用目录”。第一次授权仍需在系统选择框里确认。")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

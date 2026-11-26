@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Check existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v$VERSION already exists; skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.existing.outputs.exists == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run tests
+        if: steps.existing.outputs.exists == 'false'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+
+      - name: Build zip and dmg
+        if: steps.existing.outputs.exists == 'false'
+        run: ./menuapp/package.sh
+
+      - name: Verify artifacts
+        if: steps.existing.outputs.exists == 'false'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          test -f "dist/MaaNotify-$VERSION.zip"
+          test -f "dist/MaaNotify-$VERSION.dmg"
+          test -f "dist/MaaNotify-$VERSION.zip.sha256"
+          test -f "dist/MaaNotify-$VERSION.dmg.sha256"
+          hdiutil verify "dist/MaaNotify-$VERSION.dmg"
+
+      - name: Create GitHub Release
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          gh release create "v$VERSION" \
+            "dist/MaaNotify-$VERSION.zip" \
+            "dist/MaaNotify-$VERSION.zip.sha256" \
+            "dist/MaaNotify-$VERSION.dmg" \
+            "dist/MaaNotify-$VERSION.dmg.sha256" \
+            --title "MaaNotify $VERSION" \
+            --target "$GITHUB_SHA" \
+            --generate-notes

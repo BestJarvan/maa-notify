@@ -1,0 +1,103 @@
+name: PR Review
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.event.pull_request.draft == false
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run tests
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+
+      - name: Build zip and dmg
+        run: ./menuapp/package.sh
+
+      - name: Verify artifacts
+        run: |
+          VERSION="$(cat VERSION)"
+          test -f "dist/MaaNotify-$VERSION.zip"
+          test -f "dist/MaaNotify-$VERSION.dmg"
+          test -f "dist/MaaNotify-$VERSION.zip.sha256"
+          test -f "dist/MaaNotify-$VERSION.dmg.sha256"
+          hdiutil verify "dist/MaaNotify-$VERSION.dmg"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload PR artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MaaNotify-pr-${{ github.event.pull_request.number }}
+          path: |
+            dist/MaaNotify-*.zip
+            dist/MaaNotify-*.dmg
+            dist/MaaNotify-*.sha256
+          if-no-files-found: error
+
+  approve:
+    needs: verify
+    if: >-
+      success() &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Create labels
+        run: |
+          gh label create "auto-reviewed" --color 0E8A16 \
+            --description "自动检查通过并由机器人审批" --force
+          gh label create "needs-fix" --color D93F0B \
+            --description "自动检查未通过" --force
+
+      - name: Approve pull request
+        run: |
+          gh pr review "$PR_NUMBER" --approve --body \
+            "自动检查通过：Python 测试、Swift 构建、zip 与 dmg 打包、dmg 校验均成功。"
+          gh pr edit "$PR_NUMBER" --add-label "auto-reviewed" --remove-label "needs-fix" || true
+          gh pr comment "$PR_NUMBER" --body \
+            "✅ 自动审核通过，已由机器人审批。合并后会自动构建并发布 GitHub Release。"
+
+  needs-fix:
+    needs: verify
+    if: >-
+      failure() &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Create labels
+        run: |
+          gh label create "needs-fix" --color D93F0B \
+            --description "自动检查未通过" --force || true
+
+      - name: Mark pull request
+        run: |
+          gh pr edit "$PR_NUMBER" --add-label "needs-fix" || true
+          gh pr comment "$PR_NUMBER" --body \
+            "❌ 自动检查未通过。请查看本次 Actions 日志，修复后重新推送即可再次触发审核。"

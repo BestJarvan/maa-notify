@@ -34,10 +34,12 @@ macOS 上的 **MAA（MaaAssistantArknights）运行状态监控**。
 
 ### 方式 A：发行包
 
-下载并解压 `MaaNotify-1.0.0.zip` 后：
+**DMG（推荐）**：下载 `MaaNotify-1.1.0.dmg`，双击挂载后运行 `安装.command`。
+
+**ZIP**：下载并解压 `MaaNotify-1.1.0.zip` 后：
 
 ```bash
-cd MaaNotify-1.0.0
+cd MaaNotify-1.1.0
 ./install_menuapp.sh
 ```
 
@@ -71,7 +73,7 @@ xcode-select --install
 ~/Library/Containers/com.hguandl.MeoAsstMac/Data
 ```
 
-这是 MAA 在 macOS 上的固定位置，直接点“使用此目录”即可。如果 MAA 数据在别处，点“选择其他目录…”修改；设置窗口里也保留“使用默认目录…”入口。
+这是 MAA 在 macOS 上的固定位置，直接点“使用此目录”即可。如果 MAA 数据在别处，可以点“选择…”重新授权；设置窗口里的路径也可以手动修改，修改后点“应用目录”。
 
 App 只会读取这个目录。
 
@@ -121,7 +123,7 @@ MAA 监控 · 运行中
 |---|---|
 | 消息机器人 | 选择类型、Webhook、secret、keyword、发送测试（机器人可选） |
 | 定时与自动启停 | 增删监控定时、查看 MAA 当前定时、设置提前量和退出延迟 |
-| MAA 目录 | 使用默认目录、选择其他目录、打开目录、手动启动/退出 MAA |
+| MAA 目录 | 默认路径可手动修改、选择目录、应用目录、打开目录、手动启动/退出 MAA |
 | 启动与外观 | 登录时自动启动、菜单栏图标 |
 | 高级 | 打开 JSON 配置、查看状态 |
 
@@ -320,22 +322,25 @@ cd ..
 产物：
 
 ```text
-dist/MaaNotify-1.0.0.zip
-dist/MaaNotify-1.0.0.zip.sha256
+dist/MaaNotify-1.1.0.zip
+dist/MaaNotify-1.1.0.zip.sha256
+dist/MaaNotify-1.1.0.dmg
+dist/MaaNotify-1.1.0.dmg.sha256
 ```
 
-zip 内包含：
+两种包内容一致：
 
 - 预构建 `MaaNotify.app`
 - `maa_notify.py`
 - `config.example.json`
-- `install_menuapp.sh`
+- `install_menuapp.sh`（ZIP 用）
+- `安装.command`（DMG 双击用）
 - `README.md`
 - `LICENSE`
 
-解压后运行 `./install_menuapp.sh` 即可，不需要 Xcode。
+解压/挂载后运行安装脚本即可，不需要 Xcode。
 
-> `MaaNotify.app` 本身不是完全独立的：它引用安装到 Application Support 的 Python 运行时和配置。请使用打包后的安装脚本，不要只拷贝 `.app`。
+> `MaaNotify.app` 本身不是完全独立的：它引用安装到 Application Support 的 Python 运行时和配置。请使用安装脚本，不要只拷贝 `.app`。
 
 ## 5. 测试
 
@@ -393,14 +398,40 @@ PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s tests -v
 
 ## 8. 发布流程
 
-当前版本号统一为 **1.0.0**，暂不打 tag。功能完善后：
+版本号在仓库根目录的 `VERSION` 文件中维护。当前：
 
 ```bash
-./menuapp/package.sh
-# 手动创建 GitHub Release，上传 dist/MaaNotify-1.0.0.zip
+cat VERSION
+# 1.1.0
 ```
 
-后续可以接 GitHub Actions 自动构建 Release；目前先手动打包。
+PR 合并到 `main` 后，GitHub Actions 会：
+
+1. 重新运行测试；
+2. 构建 zip 和 dmg；
+3. 创建 `v$(cat VERSION)` 标签；
+4. 创建 GitHub Release 并上传两个安装包。
+
+如果该版本标签已存在，工作流会跳过发布，避免重复。
+
+## 9. PR 自动审核
+
+从其他分支向 `main` 提交 PR 时，会触发 `.github/workflows/pr-review.yml`：
+
+1. 运行 29 个 Python 测试；
+2. 编译 Swift 菜单栏 App；
+3. 同时构建 zip 和 dmg；
+4. 校验 dmg；
+5. 通过后机器人自动审批，并打上 `auto-reviewed` 标签；
+6. 失败则打上 `needs-fix` 标签并留言。
+
+PR 合并到 `main` 后，`.github/workflows/release.yml` 会重新构建，并自动创建 GitHub Release，上传 zip、dmg 和校验文件。若 `v$(cat VERSION)` 已发布，则跳过，避免重复。
+
+## TODO
+
+- [ ] 任务前自动唤醒睡眠中的 Mac（`pmset` + 可选 root LaunchDaemon；需要管理员授权，暂不实现）
+- [ ] 唤醒时间与 07:02 / 19:01 两个监控时段联动
+- [ ] 唤醒助手安装/卸载与设置面板状态展示
 
 ## License
 
