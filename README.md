@@ -256,17 +256,22 @@ Python 只读这个镜像目录，因此不需要给 Python 开 FDA。
 ```text
 maa-notify/
 ├── maa_notify.py             # 解析/状态机/通知/CLI
+├── VERSION                   # 版本号
 ├── config.example.json
-├── install_menuapp.sh        # 安装菜单栏版
+├── install_menuapp.sh        # ZIP 安装脚本
+├── 安装.command               # DMG 双击安装入口
 ├── uninstall_menuapp.sh
 ├── install.sh                # 旧命令行/LaunchAgent 方式
 ├── uninstall.sh
+├── .github/workflows/
+│   ├── pr-review.yml         # PR 测试 + 自动审批 + 标签
+│   └── release.yml           # main 构建 + GitHub Release
 ├── menuapp/
 │   ├── MaaNotifyMenu.swift   # 主进程 / 菜单栏 / 镜像 / 守护
 │   ├── SettingsView.swift    # 设置窗口（SwiftUI）
 │   ├── Info.plist
 │   ├── build.sh              # 编译 App
-│   └── package.sh            # 生成发行 zip
+│   └── package.sh            # 生成 zip + dmg
 ├── tests/
 │   └── test_maa_notify.py
 ├── LICENSE
