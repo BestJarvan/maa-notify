@@ -304,6 +304,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var quitting = false
     private var lastWatcherExit: Int32?
     private var iconName = "antenna"
+    private var settingsWindow: SettingsWindowController?
+    private var settingsModel: SettingsModel?
+    private var testProcess: Process?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureDirectory(kAppSupport)
@@ -318,6 +321,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setupStatusItem()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             self.bootstrap()
+        }
+        if CommandLine.arguments.contains("--settings") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                self.openSettings()
+            }
         }
     }
 
@@ -352,6 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if validateSource(url) {
                 sourceURL = url
                 startMonitoring()
+                maybeShowOnboarding()
                 return
             }
         }
@@ -359,6 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let data = try? Data(contentsOf: kBookmark), let url = resolveBookmark(data), validateSource(url) {
             sourceURL = url
             startMonitoring()
+            maybeShowOnboarding()
             return
         }
 
@@ -369,6 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if validateSource(url) {
                     sourceURL = url
                     startMonitoring()
+                    maybeShowOnboarding()
                     return
                 }
             }
@@ -427,7 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return canReadOneByte(gui) && canReadOneByte(tasks)
     }
 
-    private func promptForFolder() {
+    private func promptForFolder(after: (() -> Void)? = nil) {
         NSApp.activate(ignoringOtherApps: true)
         let panel = NSOpenPanel()
         panel.title = "选择 MAA Data 目录"
@@ -453,6 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             sourceURL = dataURL
             saveBookmark(dataURL)
             startMonitoring()
+            after?()
         }
     }
 
@@ -538,9 +550,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let feishu = base["feishu"] {
             existing["feishu"] = feishu
         }
-        if existing["policy"] == nil, let policy = base["policy"] {
-            existing["policy"] = policy
+        var policy = base["policy"] as? [String: Any] ?? [:]
+        if let oldPolicy = existing["policy"] as? [String: Any] {
+            for key in [
+                "auto_start_maa",
+                "auto_quit_maa",
+                "auto_start_lead_minutes",
+                "auto_quit_delay_seconds",
+            ] {
+                if policy[key] == nil, let value = oldPolicy[key] {
+                    policy[key] = value
+                }
+            }
         }
+        existing["policy"] = policy
 
         var runtime = existing["runtime"] as? [String: Any] ?? [:]
         if runtime["dry_run"] == nil {
@@ -660,6 +683,257 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         try? FileManager.default.removeItem(at: kWatcherPid)
     }
 
+    // MARK: settings
+
+    private func webhookConfigured() -> Bool {
+        let base = loadJSON(kBaseConfig) ?? [:]
+        let feishu = base["feishu"] as? [String: Any] ?? [:]
+        let value = (feishu["webhook"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return !value.isEmpty && !value.contains("REPLACE_ME")
+    }
+
+    private func maybeShowOnboarding() {
+        guard !webhookConfigured() else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.openSettings()
+        }
+    }
+
+    private func makeSettingsModel() -> SettingsModel {
+        let base = loadJSON(kBaseConfig) ?? [:]
+        let feishu = base["feishu"] as? [String: Any] ?? [:]
+        let policy = base["policy"] as? [String: Any] ?? [:]
+        let menu = loadJSON(kMenuConfig) ?? [:]
+        let runtime = menu["runtime"] as? [String: Any] ?? [:]
+        let settings = loadJSON(kSettings) ?? [:]
+        let folder = sourceURL?.path
+            ?? (try? String(contentsOf: kBookmarkPath, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? ""
+
+        return SettingsModel(
+            webhook: feishu["webhook"] as? String ?? "",
+            secret: feishu["secret"] as? String ?? "",
+            keyword: feishu["keyword"] as? String ?? "MAA",
+            live: !((runtime["dry_run"] as? Bool) ?? true),
+            autoStart: policy["auto_start_maa"] as? Bool ?? false,
+            autoQuit: policy["auto_quit_maa"] as? Bool ?? false,
+            leadMinutes: (policy["auto_start_lead_minutes"] as? NSNumber)?.intValue ?? 5,
+            quitDelay: (policy["auto_quit_delay_seconds"] as? NSNumber)?.intValue ?? 60,
+            icon: settings["icon"] as? String ?? iconName,
+            maaSchedule: readMaaScheduleText(),
+            folderPath: folder,
+            status: sourceURL == nil
+                ? "还没有选择 MAA 目录。"
+                : "配置保存在本机，Webhook 不会上传。"
+        )
+    }
+
+    private func refreshSettingsModel() {
+        guard let model = settingsModel else { return }
+        let fresh = makeSettingsModel()
+        model.webhook = fresh.webhook
+        model.secret = fresh.secret
+        model.keyword = fresh.keyword
+        model.live = fresh.live
+        model.autoStart = fresh.autoStart
+        model.autoQuit = fresh.autoQuit
+        model.leadMinutes = fresh.leadMinutes
+        model.quitDelay = fresh.quitDelay
+        model.icon = fresh.icon
+        model.maaSchedule = fresh.maaSchedule
+        model.folderPath = fresh.folderPath
+        model.status = fresh.status
+    }
+
+    func openSettings() {
+        if settingsModel == nil {
+            settingsModel = makeSettingsModel()
+        } else {
+            refreshSettingsModel()
+        }
+        guard let model = settingsModel else { return }
+
+        if settingsWindow == nil {
+            let actions = SettingsActions(
+                save: { [weak self] in self?.saveSettings() },
+                test: { [weak self] in self?.testWebhook() },
+                chooseFolder: { [weak self] in
+                    self?.promptForFolder {
+                        self?.refreshSettingsModel()
+                        self?.settingsModel?.status = "MAA 目录已更新。"
+                    }
+                },
+                refreshSchedule: { [weak self] in
+                    self?.settingsModel?.maaSchedule = self?.readMaaScheduleText() ?? ""
+                    self?.settingsModel?.status = "已刷新 MAA 定时。"
+                },
+                startMAA: { [weak self] in self?.startMAA() },
+                quitMAA: { [weak self] in self?.quitMAA() },
+                openAdvanced: {
+                    NSWorkspace.shared.open(kBaseConfig)
+                },
+                close: { [weak self] in
+                    self?.settingsWindow?.window?.orderOut(nil)
+                }
+            )
+            settingsWindow = SettingsWindowController(model: model, actions: actions)
+        }
+
+        settingsWindow?.showWindow(nil)
+        settingsWindow?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func saveSettings() {
+        guard let model = settingsModel else { return }
+        let webhook = model.webhook.trimmingCharacters(in: .whitespacesAndNewlines)
+        let secret = model.secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keyword = model.keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let canLive = !webhook.isEmpty && !webhook.contains("REPLACE_ME")
+
+        var base = loadJSON(kBaseConfig) ?? [:]
+        var feishu = base["feishu"] as? [String: Any] ?? [:]
+        feishu["webhook"] = webhook
+        feishu["secret"] = secret
+        feishu["keyword"] = keyword
+        base["feishu"] = feishu
+
+        var policy = base["policy"] as? [String: Any] ?? [:]
+        policy["auto_start_maa"] = model.autoStart
+        policy["auto_quit_maa"] = model.autoQuit
+        policy["auto_start_lead_minutes"] = max(1, model.leadMinutes)
+        policy["auto_quit_delay_seconds"] = max(0, model.quitDelay)
+        base["policy"] = policy
+        writeJSON(base, to: kBaseConfig)
+
+        ensureMenuConfig()
+        var menu = loadJSON(kMenuConfig) ?? [:]
+        var runtime = menu["runtime"] as? [String: Any] ?? [:]
+        runtime["dry_run"] = !(model.live && canLive)
+        menu["runtime"] = runtime
+        writeJSON(menu, to: kMenuConfig)
+
+        iconName = model.icon
+        saveIconSetting()
+        applyIcon()
+
+        stopWatcher()
+        startWatcher()
+
+        if !canLive {
+            model.live = false
+            model.status = "已保存；Webhook 未填写，飞书推送保持关闭。"
+        } else {
+            model.status = "已保存并应用。"
+        }
+        refreshSettingsModel()
+        model.status = canLive ? "已保存并应用。" : "已保存；Webhook 未填写，飞书推送保持关闭。"
+    }
+
+    private func testWebhook() {
+        guard let model = settingsModel else { return }
+        guard model.isWebhookConfigured else {
+            model.status = "请先填写飞书 Webhook。"
+            return
+        }
+        saveSettings()
+        model.testing = true
+        model.status = "正在发送测试消息…"
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: kPython)
+        process.arguments = ["-B", kRuntime.path, "--config", kBaseConfig.path, "test"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.terminationHandler = { [weak self] proc in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            DispatchQueue.main.async {
+                self?.testProcess = nil
+                self?.settingsModel?.testing = false
+                if proc.terminationStatus == 0 {
+                    self?.settingsModel?.status = "测试消息已发送，请查看飞书。"
+                } else {
+                    let tail = String(output.suffix(240))
+                    self?.settingsModel?.status = "测试失败：\(tail)"
+                }
+            }
+        }
+        testProcess = process
+        do {
+            try process.run()
+        } catch {
+            testProcess = nil
+            model.testing = false
+            model.status = "测试失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func startMAA() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-a", kMaaAppPath]
+        do {
+            try process.run()
+            settingsModel?.status = "已请求启动 MAA。"
+        } catch {
+            settingsModel?.status = "启动 MAA 失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func quitMAA() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", "tell application id \"com.hguandl.MeoAsstMac\" to quit"]
+        do {
+            try process.run()
+            settingsModel?.status = "已请求退出 MAA。"
+        } catch {
+            settingsModel?.status = "退出 MAA 失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func readMaaScheduleText() -> String {
+        let prefs = kFeedDir.appendingPathComponent("prefs.plist")
+        if let data = try? Data(contentsOf: prefs),
+           let plist = try? PropertyListSerialization.propertyList(
+               from: data,
+               options: [],
+               format: nil
+           ) as? [String: Any],
+           let raw = plist["MAAScheduledDailyTaskTimer"] {
+            var value: Any = raw
+            if let text = raw as? String,
+               let jsonData = text.data(using: .utf8),
+               let parsed = try? JSONSerialization.jsonObject(with: jsonData) {
+                value = parsed
+            }
+            if let items = value as? [[String: Any]] {
+                var slots: [String] = []
+                for item in items {
+                    let enabled = (item["isEnabled"] as? NSNumber)?.boolValue ?? true
+                    guard enabled,
+                          let hour = (item["hour"] as? NSNumber)?.intValue,
+                          let minute = (item["minute"] as? NSNumber)?.intValue
+                    else { continue }
+                    slots.append(String(format: "%02d:%02d", hour, minute))
+                }
+                if !slots.isEmpty {
+                    return slots.sorted().joined(separator: " / ")
+                }
+            }
+        }
+
+        let base = loadJSON(kBaseConfig) ?? [:]
+        let maa = base["maa"] as? [String: Any] ?? [:]
+        let fallback = maa["fallback_times"] as? [String] ?? []
+        return fallback.joined(separator: " / ")
+    }
+
     // MARK: menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -667,91 +941,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let status = loadJSON(kStatus) ?? [:]
         let state = loadJSON(kStateDir.appendingPathComponent("state.json")) ?? [:]
-        let menuConfig = loadJSON(kMenuConfig) ?? [:]
-        let runtime = menuConfig["runtime"] as? [String: Any] ?? [:]
-        let dryRun = (runtime["dry_run"] as? Bool) ?? true
-        let policy = menuConfig["policy"] as? [String: Any] ?? [:]
-        let autoStart = (policy["auto_start_maa"] as? Bool) ?? false
-        let autoQuit = (policy["auto_quit_maa"] as? Bool) ?? false
-        let autoOn = autoStart && autoQuit
-        let autoLead = (policy["auto_start_lead_minutes"] as? NSNumber)?.intValue ?? 5
-        let autoQuitDelay = (policy["auto_quit_delay_seconds"] as? NSNumber)?.intValue ?? 60
-
         let error = (status["error"] as? String) ?? ""
         let source = sourceURL?.path ?? ""
         let watcherRunning = watcher?.isRunning ?? false
 
+        let headline: String
         if source.isEmpty {
-            addInfo(menu, "MAA 监控：未授权")
-            addInfo(menu, "请在菜单里选择 MAA 的 Data 目录")
+            headline = "未授权"
         } else if !error.isEmpty {
-            addInfo(menu, "MAA 监控：同步异常")
-            addInfo(menu, error)
+            headline = "同步异常"
+        } else if !watcherRunning {
+            headline = "解析进程未运行"
         } else {
-            addInfo(menu, "MAA 监控：运行中")
+            headline = "运行中"
         }
-
-        if let lastSyncText = status["lastSync"] as? String,
-           let lastSync = ISO8601DateFormatter().date(from: lastSyncText) {
-            addInfo(menu, "上次同步：\(formatAge(lastSync))")
-        } else {
-            addInfo(menu, "上次同步：等待中")
-        }
+        addInfo(menu, "MAA 监控 · \(headline)")
 
         if let last = state["last_run"] as? [String: Any] {
-            let date = last["date"] as? String ?? ""
             let slot = last["slot"] as? String ?? ""
             let st = last["status"] as? String ?? ""
             let counts = last["counts"] as? [String: Any] ?? [:]
-            let completed = counts["completed"] as? Int ?? 0
-            let total = counts["total"] as? Int ?? 0
-            addInfo(menu, "上次结果：\(date) \(slot) \(statusLabel(st))（\(completed)/\(total)）")
+            let completed = (counts["completed"] as? NSNumber)?.intValue ?? 0
+            let total = (counts["total"] as? NSNumber)?.intValue ?? 0
+            addInfo(menu, "上次：\(slot) \(statusLabel(st))（\(completed)/\(total)）")
         } else {
-            addInfo(menu, "上次结果：暂无")
+            addInfo(menu, "上次：暂无")
         }
 
-        addInfo(menu, "解析进程：\(watcherRunning ? "运行中" : "未运行")")
-        addInfo(menu, "飞书推送：\(dryRun ? "关闭（dry-run）" : "已开启")")
-        addInfo(
-            menu,
-            "自动启停 MAA：\(autoOn ? "已开启" : "已关闭")"
-                + (autoOn ? "（提前 \(autoLead) 分钟启动，结束后 \(autoQuitDelay) 秒退出）" : "")
-        )
+        let schedule = readMaaScheduleText()
+        if !schedule.isEmpty {
+            addInfo(menu, "定时：\(schedule)")
+        }
+
+        if !error.isEmpty {
+            addInfo(menu, "错误：\(String(error.prefix(80)))")
+        }
 
         menu.addItem(.separator())
-
-        let iconMenu = NSMenu()
-        let icons: [(String, String)] = [
-            ("antenna", "天线（默认）"),
-            ("gamecontroller", "手柄"),
-            ("shield.lefthalf.filled", "盾牌"),
-            ("bolt.horizontal.circle", "闪电"),
-            ("waveform", "波形"),
-            ("text", "MAA 文字"),
-            ("maa", "MAA App 图标"),
-        ]
-        for (name, title) in icons {
-            let item = NSMenuItem(title: title, action: #selector(setIconAction(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = name
-            item.state = (name == iconName) ? .on : .off
-            iconMenu.addItem(item)
-        }
-        let iconItem = NSMenuItem(title: "更换图标", action: nil, keyEquivalent: "")
-        iconItem.submenu = iconMenu
-        menu.addItem(iconItem)
-
-        addAction(menu, "重新选择 MAA 目录…", #selector(chooseFolderAction))
-        addAction(menu, "打开 watcher 日志", #selector(openLogAction))
-        addAction(menu, "打开 feed 目录", #selector(openFeedAction))
-        addAction(menu, "打开配置", #selector(openConfigAction))
-        addAction(menu, "重启监控", #selector(restartAction))
-        addAction(menu, dryRun ? "开启飞书推送" : "关闭飞书推送", #selector(toggleLiveAction))
-        addAction(
-            menu,
-            autoOn ? "关闭自动启停 MAA" : "开启自动启停 MAA",
-            #selector(toggleAutoControlAction)
-        )
+        addAction(menu, "设置…", #selector(openSettingsAction))
+        addAction(menu, "打开日志", #selector(openLogAction))
         menu.addItem(.separator())
         addAction(menu, "退出", #selector(quitAction))
 
@@ -899,6 +1127,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startWatcher()
     }
 
+    @objc private func openSettingsAction() {
+        openSettings()
+    }
+
     @objc private func quitAction() {
         quitting = true
         NSApp.terminate(nil)
@@ -907,7 +1139,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 // MARK: - main
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+@main
+struct MaaNotifyMain {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
+    }
+}

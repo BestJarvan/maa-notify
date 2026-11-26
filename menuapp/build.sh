@@ -10,9 +10,9 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 echo "编译 Swift…"
-swiftc -O -swift-version 5 -framework Cocoa \
+swiftc -O -swift-version 5 -framework Cocoa -framework SwiftUI \
   -o "$APP/Contents/MacOS/MaaNotify" \
-  "$SRC/MaaNotifyMenu.swift"
+  "$SRC/MaaNotifyMenu.swift" "$SRC/SettingsView.swift"
 
 cp "$SRC/Info.plist" "$APP/Contents/Info.plist"
 /usr/bin/plutil -lint "$APP/Contents/Info.plist" >/dev/null

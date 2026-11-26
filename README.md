@@ -91,7 +91,7 @@ cd maa-notify
    ```text
    ~/Library/Application Support/MaaNotify/app/config.json
    ```
-4. 首次启动时弹出目录选择框。
+4. 首次启动时弹出目录选择框；如果还没配置 Webhook，会自动打开设置窗口。
 
 ### 3. 首次授权目录
 
@@ -104,68 +104,85 @@ cd maa-notify
 App 只会读取这个目录，不需要“完全磁盘访问权限”。  
 如果之后系统让书签失效，菜单栏会提示重新选择一次。
 
-### 4. 配置飞书
+### 4. 在设置窗口配置
 
-编辑：
+点菜单栏 MAA 图标 → **设置…**，不用手改 JSON。
 
-```bash
-open "$HOME/Library/Application Support/MaaNotify/app/config.json"
+**飞书机器人**
+
+1. 在飞书群打开“群设置 → 群机器人 → 添加机器人 → 自定义机器人”；
+2. 复制 Webhook；
+3. 粘贴到设置窗口的“飞书机器人”一栏；
+4. 机器人开了签名校验就填 `secret`，设置了关键词就填 `keyword`；
+5. 点击 **发送测试消息**，飞书收到卡片即成功；
+6. 打开 **启用飞书推送**，点 **保存并应用**。
+
+**定时与自动启停**
+
+设置窗口会自动显示从 MAA 读取的定时，例如：
+
+```text
+MAA 定时：07:02 / 19:01
 ```
 
-填入：
+可以设置：
 
-```json
-{
-  "feishu": {
-    "webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/你的地址",
-    "secret": "",
-    "keyword": "MAA",
-    "notify_on_success": true,
-    "notify_on_partial": true,
-    "notify_on_missed": true
-  }
-}
-```
+- 定时前自动启动 MAA；
+- 任务结束后自动退出 MAA；
+- 提前几分钟启动；
+- 报告发送后多少秒退出。
 
-- 机器人开启“签名校验”时填写 `secret`。
-- 机器人设置“自定义关键词”时，确保 `keyword` 出现在卡片里（默认 `MAA`）。
-- Webhook 是敏感信息，`config.json` 权限为 600，且已被 `.gitignore` 排除。
+**MAA 目录**
 
-然后点菜单栏 MAA 图标：
-
-- `开启飞书推送`：从 dry-run 切换为真实推送。
-- 可选 `开启自动启停 MAA`。
+可以重新选择目录、打开目录，或手动启动/退出 MAA。
 
 ### 5. 验证
 
+在设置窗口点 **发送测试消息** 即可，不需要开终端。
+
+也可以命令行验证：
+
 ```bash
 APP="$HOME/Library/Application Support/MaaNotify/app"
-
-# 发测试卡片
 /usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" test
 ```
-
-看到飞书消息即成功。
 
 ---
 
 ## 菜单栏 App
 
-安装后菜单栏会出现一个图标（默认天线，可更换）：
+安装后菜单栏会出现一个图标（默认天线，可在设置里更换）。
 
-| 菜单项 | 作用 |
+菜单只保留最关键的信息和入口：
+
+```text
+MAA 监控 · 运行中
+上次：07:02 部分失败（7/8）
+定时：07:02 / 19:01
+————————————
+设置…
+打开日志
+————————————
+退出
+```
+
+所有配置都收进 **设置窗口**：
+
+| 区域 | 内容 |
 |---|---|
-| MAA 监控：运行中 / 未授权 / 同步异常 | 当前状态 |
-| 上次同步 | feed 最近更新时间 |
-| 上次结果 | 最近一场成功/失败情况 |
-| 解析进程 | Python watcher 是否运行 |
-| 飞书推送 | 已开启 / 关闭（dry-run） |
-| 自动启停 MAA | 已开启 / 已关闭 |
-| 更换图标 | 天线、手柄、盾牌、闪电、波形、MAA 文字、MAA App 图标 |
-| 重新选择 MAA 目录… | 书签失效时使用 |
-| 打开 watcher 日志 / feed / 配置 | 排查 |
-| 重启监控 | 重启镜像和 watcher |
-| 退出 | 正常退出，下次登录再启动 |
+| 飞书机器人 | Webhook、secret、keyword、启用推送、发送测试消息 |
+| 定时与自动启停 | MAA 定时（自动读取）、提前启动分钟数、结束后退出延迟 |
+| MAA 目录 | 重新选择、打开目录、启动/退出 MAA |
+| 外观 | 天线/手柄/盾牌/闪电/波形/MAA 文字/MAA App 图标 |
+| 高级 | 打开 JSON 配置、查看状态 |
+
+首次配置会显示“三步开始监控”引导：选择目录 → 粘贴 Webhook → 发送测试消息。
+
+需要直接打开设置窗口时：
+
+```bash
+open -a "$HOME/Applications/MaaNotify.app" --args --settings
+```
 
 日志：
 
@@ -178,7 +195,7 @@ APP="$HOME/Library/Application Support/MaaNotify/app"
 
 ## 自动启停 MAA
 
-在菜单栏开启，或在配置中设置：
+在 **设置 → 定时与自动启停** 开启，或在配置中设置：
 
 ```json
 "policy": {
@@ -384,7 +401,8 @@ maa-notify/
 ├── install.sh                # 旧 LaunchAgent 安装（需要 FDA）
 ├── uninstall.sh
 ├── menuapp/
-│   ├── MaaNotifyMenu.swift   # 菜单栏 App
+│   ├── MaaNotifyMenu.swift   # 菜单栏 App / 主进程
+│   ├── SettingsView.swift    # 设置窗口
 │   ├── Info.plist
 │   └── build.sh
 ├── tests/
@@ -444,7 +462,7 @@ tail -50 "$HOME/Library/Application Support/MaaNotify/menuapp/watcher.log"
 
 ### 自动启停不生效
 
-- 确认菜单里显示“自动启停 MAA：已开启”。
+- 确认设置窗口里“定时前自动启动 MAA”和“任务结束后自动退出 MAA”已打开。
 - 确认当前不是 dry-run。
 - 06:57 / 18:56 时 Mac 不能处于睡眠。
 - MAA 路径应为 `/Applications/MAA.app`。

@@ -28,6 +28,7 @@ mkdir -p "$SUPPORT/app"
 cp -f "$SRC/maa_notify.py" "$SUPPORT/app/maa_notify.py"
 cp -f "$SRC/config.example.json" "$SUPPORT/app/config.example.json" 2>/dev/null || true
 cp -f "$SRC/README.md" "$SUPPORT/app/README.md" 2>/dev/null || true
+cp -f "$SRC/LICENSE" "$SUPPORT/app/LICENSE" 2>/dev/null || true
 chmod +x "$SUPPORT/app/maa_notify.py"
 
 # 首次安装必须有一个可编辑的配置；菜单栏 App 会从它同步 feishu 配置。
