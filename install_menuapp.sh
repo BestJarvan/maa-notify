@@ -97,7 +97,7 @@ echo "安装完成。"
 echo "菜单栏出现 MAA 图标后，第一次会要求选择 MAA 的 Data 目录："
 echo "  ~/Library/Containers/com.hguandl.MeoAsstMac/Data"
 echo
-echo "首次安装默认 live（实际执行）；自动启停默认关闭，机器人不填也能监控。"
+echo "首次安装默认实际执行；自动启停默认关闭，机器人不填也能监控。"
 if [ "$LOGIN_ITEM" = "true" ]; then
   echo "登录时自动启动：开启（可在设置窗口关闭）。"
 else

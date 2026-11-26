@@ -803,8 +803,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let notify = base["notify"] as? [String: Any] ?? [:]
         let feishu = base["feishu"] as? [String: Any] ?? [:]
         let policy = base["policy"] as? [String: Any] ?? [:]
-        let menu = loadJSON(kMenuConfig) ?? [:]
-        let runtime = menu["runtime"] as? [String: Any] ?? [:]
         let settings = loadJSON(kSettings) ?? [:]
         let folder = sourceURL?.path
             ?? (try? String(contentsOf: kBookmarkPath, encoding: .utf8))?
@@ -827,7 +825,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             webhook: webhook,
             secret: secret,
             keyword: keyword,
-            live: !((runtime["dry_run"] as? Bool) ?? true),
             autoStart: policy["auto_start_maa"] as? Bool ?? false,
             autoQuit: policy["auto_quit_maa"] as? Bool ?? false,
             leadMinutes: (policy["auto_start_lead_minutes"] as? NSNumber)?.intValue ?? 5,
@@ -852,7 +849,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.webhook = fresh.webhook
         model.secret = fresh.secret
         model.keyword = fresh.keyword
-        model.live = fresh.live
         model.autoStart = fresh.autoStart
         model.autoQuit = fresh.autoQuit
         model.leadMinutes = fresh.leadMinutes
@@ -959,11 +955,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         writeJSON(base, to: kBaseConfig)
 
         ensureMenuConfig()
-        var menu = loadJSON(kMenuConfig) ?? [:]
-        var runtime = menu["runtime"] as? [String: Any] ?? [:]
-        runtime["dry_run"] = !model.live
-        menu["runtime"] = runtime
-        writeJSON(menu, to: kMenuConfig)
 
         iconName = model.icon
         var settings = loadJSON(kSettings) ?? [:]
@@ -976,14 +967,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         stopWatcher()
         startWatcher()
 
-        let status: String
-        if !hasWebhook {
-            status = model.live
-                ? "已保存；未配置机器人，只监控并记录，不发送通知。"
-                : "已保存；演练模式，不发送通知，也不自动启停 MAA。"
-        } else {
-            status = "已保存并应用。"
-        }
+        let status = hasWebhook
+            ? "已保存并应用。"
+            : "已保存；未配置机器人，只监控并记录，不发送通知。"
         refreshSettingsModel()
         model.status = status
     }
@@ -1339,17 +1325,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if policy["auto_start_lead_minutes"] == nil { policy["auto_start_lead_minutes"] = 5 }
         if policy["auto_quit_delay_seconds"] == nil { policy["auto_quit_delay_seconds"] = 60 }
         config["policy"] = policy
-        writeJSON(config, to: kMenuConfig)
-        stopWatcher()
-        startWatcher()
-    }
-
-    @objc private func toggleLiveAction() {
-        var config = loadJSON(kMenuConfig) ?? [:]
-        var runtime = config["runtime"] as? [String: Any] ?? [:]
-        let dryRun = (runtime["dry_run"] as? Bool) ?? true
-        runtime["dry_run"] = !dryRun
-        config["runtime"] = runtime
         writeJSON(config, to: kMenuConfig)
         stopWatcher()
         startWatcher()

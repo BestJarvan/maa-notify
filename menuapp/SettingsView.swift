@@ -22,7 +22,6 @@ final class SettingsModel: ObservableObject {
     @Published var webhook: String
     @Published var secret: String
     @Published var keyword: String
-    @Published var live: Bool
     @Published var autoStart: Bool
     @Published var autoQuit: Bool
     @Published var leadMinutes: Int
@@ -40,7 +39,6 @@ final class SettingsModel: ObservableObject {
         webhook: String,
         secret: String,
         keyword: String,
-        live: Bool,
         autoStart: Bool,
         autoQuit: Bool,
         leadMinutes: Int,
@@ -56,7 +54,6 @@ final class SettingsModel: ObservableObject {
         self.webhook = webhook
         self.secret = secret
         self.keyword = keyword
-        self.live = live
         self.autoStart = autoStart
         self.autoQuit = autoQuit
         self.leadMinutes = leadMinutes
@@ -229,24 +226,7 @@ struct SettingsView: View {
     }
 
     private var scheduleCard: some View {
-        card("运行模式与定时") {
-            Picker("运行模式", selection: $model.live) {
-                Text("演练（dry-run）").tag(false)
-                Text("实际执行（live）").tag(true)
-            }
-            .pickerStyle(.segmented)
-            Text("演练：只读取日志、更新菜单和历史；不发送通知，也不自动启停 MAA。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text("实际执行：发送通知，并允许自动启停 MAA；未填机器人时只跳过通知。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if !model.live && (model.autoStart || model.autoQuit) {
-                Text("当前为演练模式，下面的自动启停不会执行。")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-            Divider()
+        card("定时与自动启停") {
             Text("监控定时").font(.subheadline).fontWeight(.medium)
             ForEach(Array(model.scheduleTimes.enumerated()), id: \.offset) { index, _ in
                 HStack(spacing: 8) {
@@ -394,24 +374,23 @@ struct SecretInput: View {
                 TextField(placeholder, text: $text)
                     .textFieldStyle(.roundedBorder)
             } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "lock.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text(trimmed.isEmpty ? emptyText : String(repeating: "•", count: 10))
-                        .foregroundStyle(trimmed.isEmpty ? .secondary : .primary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .background(Color(nsColor: .textBackgroundColor))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5)
-                        .stroke(Color(nsColor: .separatorColor))
+                // 用同一种输入控件承载掩码，避免切换时高度变化导致窗口抖动。
+                TextField(
+                    "",
+                    text: .constant(
+                        trimmed.isEmpty
+                            ? emptyText
+                            : String(repeating: "•", count: 10)
+                    )
                 )
-                .contentShape(Rectangle())
-                .onTapGesture { reveal = true }
+                .textFieldStyle(.roundedBorder)
+                .disabled(true)
+                .overlay {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { reveal = true }
+                }
+                .help("点击查看并编辑")
             }
             Button {
                 reveal.toggle()
