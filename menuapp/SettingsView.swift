@@ -93,6 +93,7 @@ struct SettingsActions {
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     let actions: SettingsActions
+    @State private var revealWebhook = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -175,8 +176,22 @@ struct SettingsView: View {
                 Text("企业微信").tag("wecom")
             }
             .pickerStyle(.menu)
-            TextField("Webhook 地址", text: $model.webhook)
-                .textFieldStyle(.roundedBorder)
+            HStack(spacing: 6) {
+                if revealWebhook {
+                    TextField("Webhook 地址", text: $model.webhook)
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    SecureField("Webhook 地址", text: $model.webhook)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Button {
+                    revealWebhook.toggle()
+                } label: {
+                    Image(systemName: revealWebhook ? "eye.slash" : "eye")
+                }
+                .buttonStyle(.borderless)
+                .help(revealWebhook ? "隐藏 Webhook" : "显示 Webhook")
+            }
             SecureField("签名密钥（飞书/钉钉，可选）", text: $model.secret)
                 .textFieldStyle(.roundedBorder)
             TextField("自定义关键词（可选）", text: $model.keyword)

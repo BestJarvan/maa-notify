@@ -11,6 +11,7 @@ __pycache__/
 
 # 菜单栏 App 构建产物
 menuapp/build/
+dist/
 *.dSYM/
 
 # 运行日志/状态

@@ -14,8 +14,12 @@ SUPPORT="$HOME/Library/Application Support/MaaNotify"
 echo "源码：$SRC"
 echo "App：$APP_DEST"
 
-# 1. 构建
-bash "$SRC/menuapp/build.sh" "$BUILD"
+# 1. 构建（发布包中可能只有预构建 App，没有 build.sh）
+if [ -f "$SRC/menuapp/build.sh" ]; then
+  bash "$SRC/menuapp/build.sh" "$BUILD"
+else
+  echo "使用预构建 App：$BUILD/MaaNotify.app"
+fi
 
 # 2. 安装 App
 mkdir -p "$HOME/Applications"
