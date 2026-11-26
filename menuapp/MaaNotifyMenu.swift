@@ -1,6 +1,7 @@
 import Cocoa
 import Darwin
 import Foundation
+import SwiftUI
 
 // MARK: - Paths
 
@@ -322,7 +323,7 @@ final class MirrorEngine {
 
 // MARK: - App
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var mirror: MirrorEngine?
     private var watcher: Process?
@@ -337,6 +338,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsModel: SettingsModel?
     private var testProcess: Process?
     private var syncProcess: Process?
+    private var menuPanel: NSPanel?
+    private var menuPanelHosting: NSHostingView<MenuPanelView>?
+    private var menuLocalMonitor: Any?
+    private var menuGlobalMonitor: Any?
+    private var statusDot: NSView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureDirectory(kAppSupport)
@@ -357,10 +363,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.openSettings()
             }
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            self.refreshStatusIcon()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         quitting = true
+        closeMenuPanel()
         restartWork?.cancel()
         mirror?.stop()
         mirror = nil
@@ -375,11 +385,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.toolTip = "MAA 状态监控"
+            button.target = self
+            button.action = #selector(toggleMenuPanel(_:))
+            button.sendAction(on: [.leftMouseUp])
         }
+        setupStatusDot()
         applyIcon()
-        let menu = NSMenu()
-        menu.delegate = self
-        statusItem.menu = menu
     }
 
     // MARK: startup / authorization
@@ -1177,11 +1188,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return configured.isEmpty ? readMaaScheduleList() : configured
     }
 
-    // MARK: menu
+    // MARK: menu panel
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-
+    private func currentMenuInfo() -> MenuPanelInfo {
         let status = loadJSON(kStatus) ?? [:]
         let state = loadJSON(kStateDir.appendingPathComponent("state.json")) ?? [:]
         let error = (status["error"] as? String) ?? ""
@@ -1189,68 +1198,165 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let watcherRunning = watcher?.isRunning ?? false
 
         let headline: String
+        let panelStatus: MenuPanelStatus
         if source.isEmpty {
             headline = "未授权"
+            panelStatus = .unauthorized
         } else if !error.isEmpty {
             headline = "同步异常"
+            panelStatus = .error
         } else if !watcherRunning {
             headline = "解析进程未运行"
+            panelStatus = .warning
         } else {
             headline = "运行中"
+            panelStatus = .running
         }
-        addInfo(menu, "MAA 监控 · \(headline)")
 
-        if let last = state["last_run"] as? [String: Any] {
-            let slot = last["slot"] as? String ?? ""
-            let st = last["status"] as? String ?? ""
-            let counts = last["counts"] as? [String: Any] ?? [:]
+        let last: String
+        if let lastRun = state["last_run"] as? [String: Any] {
+            let slot = lastRun["slot"] as? String ?? ""
+            let st = lastRun["status"] as? String ?? ""
+            let counts = lastRun["counts"] as? [String: Any] ?? [:]
             let completed = (counts["completed"] as? NSNumber)?.intValue ?? 0
             let total = (counts["total"] as? NSNumber)?.intValue ?? 0
-            addInfo(menu, "上次：\(slot) \(statusLabel(st))（\(completed)/\(total)）")
+            last = "\(slot) \(statusLabel(st))（\(completed)/\(total)）"
         } else {
-            addInfo(menu, "上次：暂无")
+            last = "暂无"
         }
 
         let schedule = configuredScheduleList().joined(separator: " / ")
-        if !schedule.isEmpty {
-            addInfo(menu, "定时：\(schedule)")
-        }
-
-        if !error.isEmpty {
-            addInfo(menu, "错误：\(String(error.prefix(80)))")
-        }
-
-        menu.addItem(.separator())
-        addAction(menu, "设置…", #selector(openSettingsAction))
-        addAction(menu, "打开日志", #selector(openLogAction))
-        menu.addItem(.separator())
-        addAction(menu, "退出", #selector(quitAction))
-
-        updateIcon(error: error, authorized: !source.isEmpty)
+        return MenuPanelInfo(
+            headline: headline,
+            status: panelStatus,
+            last: last,
+            schedule: schedule.isEmpty ? nil : schedule,
+            error: error.isEmpty ? nil : String(error.prefix(100))
+        )
     }
 
-    private func addInfo(_ menu: NSMenu, _ title: String) {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        menu.addItem(item)
+    @objc private func toggleMenuPanel(_ sender: Any?) {
+        if menuPanel?.isVisible == true {
+            closeMenuPanel()
+        } else {
+            openMenuPanel()
+        }
     }
 
-    private func addAction(_ menu: NSMenu, _ title: String, _ selector: Selector) {
-        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
+    private func openMenuPanel() {
+        closeMenuPanel()
+        refreshStatusIcon()
+        let info = currentMenuInfo()
+        let view = MenuPanelView(
+            info: info,
+            onSettings: { [weak self] in
+                self?.closeMenuPanel()
+                self?.openSettings()
+            },
+            onOpenLog: { [weak self] in
+                self?.closeMenuPanel()
+                NSWorkspace.shared.open(kWatcherLog)
+            },
+            onQuit: { [weak self] in
+                self?.closeMenuPanel()
+                self?.quitting = true
+                NSApp.terminate(nil)
+            }
+        )
+
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 348, height: 10)
+        host.layoutSubtreeIfNeeded()
+        let height = max(180, host.fittingSize.height)
+        host.frame = NSRect(x: 0, y: 0, width: 348, height: height)
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 348, height: height),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = NSColor.clear
+        panel.hasShadow = true
+        panel.level = NSWindow.Level.popUpMenu
+        panel.collectionBehavior = [NSWindow.CollectionBehavior.canJoinAllSpaces, .transient]
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.contentView = host
+
+        if let button = statusItem.button, let window = button.window {
+            let buttonRect = button.convert(button.bounds, to: nil)
+            let screenRect = window.convertToScreen(buttonRect)
+            let visible = (window.screen ?? NSScreen.main)?.visibleFrame
+                ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+            let x = min(
+                max(screenRect.maxX - 348, visible.minX + 8),
+                visible.maxX - 348 - 8
+            )
+            let y = screenRect.minY - height - 6
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+
+        menuPanel = panel
+        menuPanelHosting = host
+        statusItem.button?.highlight(true)
+        panel.orderFront(nil)
+
+        menuLocalMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] event in
+            guard let self, let panel = self.menuPanel, panel.isVisible else {
+                return event
+            }
+            if event.window === panel || event.window === self.statusItem.button?.window {
+                return event
+            }
+            self.closeMenuPanel()
+            return event
+        }
+
+        menuGlobalMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            self?.closeMenuPanel()
+        }
+    }
+
+    private func closeMenuPanel() {
+        if let monitor = menuLocalMonitor {
+            NSEvent.removeMonitor(monitor)
+            menuLocalMonitor = nil
+        }
+        if let monitor = menuGlobalMonitor {
+            NSEvent.removeMonitor(monitor)
+            menuGlobalMonitor = nil
+        }
+        menuPanel?.orderOut(nil)
+        menuPanel = nil
+        menuPanelHosting = nil
+        statusItem?.button?.highlight(false)
+    }
+
+    private func refreshStatusIcon() {
+        let status = loadJSON(kStatus) ?? [:]
+        let error = (status["error"] as? String) ?? ""
+        updateIcon(error: error, authorized: sourceURL != nil)
     }
 
     private func updateIcon(error: String, authorized: Bool) {
         if !authorized {
             setSymbolIcon("questionmark.circle")
+            setStatusDot(.systemOrange)
             return
         }
         if !error.isEmpty {
             setSymbolIcon("exclamationmark.triangle.fill")
+            setStatusDot(.systemOrange)
             return
         }
         applyIcon()
+        setStatusDot(.systemGreen)
     }
 
     private func setSymbolIcon(_ name: String) {
@@ -1260,6 +1366,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             image.isTemplate = true
             button.image = image
         }
+        layoutStatusDot()
+    }
+
+    private func setupStatusDot() {
+        guard let button = statusItem.button else { return }
+        let dot = NSView(frame: NSRect(x: 0, y: 2, width: 5, height: 5))
+        dot.wantsLayer = true
+        dot.layer?.cornerRadius = 2.5
+        dot.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        dot.autoresizingMask = [.minXMargin, .maxYMargin]
+        button.addSubview(dot)
+        statusDot = dot
+        layoutStatusDot()
+    }
+
+    private func layoutStatusDot() {
+        guard let button = statusItem.button, let dot = statusDot else { return }
+        dot.frame = NSRect(
+            x: max(0, button.bounds.width - 7),
+            y: 2,
+            width: 5,
+            height: 5
+        )
+    }
+
+    private func setStatusDot(_ color: NSColor) {
+        statusDot?.layer?.backgroundColor = color.cgColor
     }
 
     private func applyIcon() {
@@ -1269,6 +1402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if iconName == "text" {
             button.title = "MAA"
+            layoutStatusDot()
             return
         }
         if iconName == "maa" {
@@ -1277,6 +1411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 image.size = NSSize(width: 18, height: 18)
                 image.isTemplate = false
                 button.image = image
+                layoutStatusDot()
                 return
             }
         }
@@ -1287,6 +1422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ) {
             image.isTemplate = true
             button.image = image
+            layoutStatusDot()
             return
         }
         setSymbolIcon("antenna.radiowaves.left.and.right")

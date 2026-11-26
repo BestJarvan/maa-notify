@@ -1,194 +1,187 @@
-# MAA Notify
+<div align="center">
 
-macOS 上的 **MAA（MaaAssistantArknights）运行状态监控**。
+<img src="docs/images/readme-hero.webp" alt="MaaNotify 菜单栏界面预览" width="100%">
 
-读取 MAA 日志，判断每次定时任务是否成功、哪些任务失败、失败原因，可选通过消息机器人推送。附带菜单栏 App，不需要“完全磁盘访问权限”。
+# MaaNotify
 
-> 默认只读 MAA。可选的“自动启停 MAA”会操作 MAA，默认关闭。
+**人不在电脑前，也能知道 MAA 任务跑得怎么样。**<br>
+到点拉起 MAA、结束后退出、逐任务判断结果，并推送到手机。
+
+<p>
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-13%2B-111111?logo=apple&logoColor=white">
+  <img alt="版本" src="https://img.shields.io/badge/版本-1.0.1-2ea44f">
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-blue">
+  <a href="https://github.com/BestJarvan/maa-notify/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/BestJarvan/maa-notify?label=release"></a>
+  <a href="https://github.com/BestJarvan/maa-notify/actions/workflows/pr-review.yml"><img alt="PR 审核" src="https://github.com/BestJarvan/maa-notify/actions/workflows/pr-review.yml/badge.svg?branch=main"></a>
+</p>
+
+<p>
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#功能">功能</a> ·
+  <a href="#消息机器人">消息机器人</a> ·
+  <a href="#常见问题">常见问题</a> ·
+  <a href="#开发与维护">开发与维护</a>
+</p>
+
+</div>
 
 ---
 
-# 第一部分：使用指南
+> **只读 MAA 日志，不需要给 Python 开“完全磁盘访问权限”。**<br>
+> 只有你主动开启“自动启停 MAA”时，MaaNotify 才会操作 MAA。
 
-## 1. 它做什么
+## 为什么需要 MaaNotify
 
-- 每天按你设置的定时检查 MAA；
-- 逐任务判断成功 / 失败 / 重试后成功；
-- 失败时说明具体任务和原因，例如：
-  - `刷理智（PR-A-1）：关卡识别失败`
-  - `刷理智（1-7）：完成`
-- 可选通过飞书 / Lark、通用 Webhook、Bark、钉钉、企业微信推送；
-- 菜单栏显示当前状态、上次结果、定时；
-- 可选自动启动 / 退出 MAA。
+MAA 可以自己按计划跑，但人不在电脑前时，经常遇到这些问题：
 
-它不会操作游戏，不会修改 MAA 日志；只有你主动开启自动启停时，才会控制 MAA。
+- 到点了，MAA 没有启动；
+- 任务跑完了，不知道结果；
+- 某个任务失败了，还要远程连回 Mac 看日志；
+- 跑完后 MAA 一直挂着，还要手动退出。
 
-## 2. 安装
+MaaNotify 补的是这一段：
 
-### 环境
+- 按设定时间由 App 拉起 MAA（可选）；
+- 任务结束后自动退出 MAA（可选）；
+- 读取 MAA 日志，逐任务判断成功、失败、重试恢复；
+- 把失败任务和失败原因整理出来；
+- 通过飞书、钉钉、企业微信等机器人推送到手机。
 
-- macOS 13+
-- 已安装 MAA（默认 `/Applications/MAA.app`）
-- 消息机器人 Webhook（可选，不填也能监控，只是收不到推送）
-- Python 3.9+（macOS 自带 `/usr/bin/python3` 即可）
+适合这些场景：
 
-### 方式 A：发行包
+- 外出、上班时，MAA 在 Mac 上按计划执行；
+- 想第一时间知道有没有任务失败；
+- 不想为了看结果专门开远程桌面回电脑；
+- Mac 长期挂机、MAA 一直开着：自动退出 + 下次任务前启动，会让 MAA 重新走启动时的更新检查，避免长期不重启一直不触发自动更新。
 
-**DMG（推荐）**：下载 `MaaNotify-1.0.0.dmg`，双击挂载后运行 `安装.command`。
+> MaaNotify 不是云控，不会绕过 MAA 的本地计划。它做的是本地定时拉起、监控和通知。<br>
+> Mac 在任务时间需要保持唤醒；睡眠唤醒尚未实现。
 
-**ZIP**：下载并解压 `MaaNotify-1.0.0.zip` 后：
+## 功能
+
+| 能力 | 说明 |
+|---|---|
+| 逐任务结果 | 成功、失败、重试后恢复、未执行、超时、取消 |
+| 失败原因 | 尽量从 `asst.log` 中提取，例如关卡识别失败 |
+| 菜单栏常驻 | 当前状态、上次结果、监控定时 |
+| 消息机器人 | 飞书 / Lark、通用 Webhook、Bark、钉钉、企业微信 |
+| 消息可选 | 不填机器人也能监控，只是不发送通知 |
+| 自动启停 MAA | 任务前启动、结束后退出，可设置提前量和退出延迟 |
+| 登录自启 | 开机登录桌面后自动运行 MaaNotify |
+| 目录可修改 | 默认 MAA Data 目录，可手动改路径或重新选择 |
+| 本地优先 | Webhook 和配置只保存在本机，不上传 |
+
+## 快速开始
+
+### 方式一：DMG（推荐）
+
+1. 打开 [Releases](https://github.com/BestJarvan/maa-notify/releases/latest)，下载 `MaaNotify-1.0.1.dmg`
+2. 双击挂载 DMG
+3. 双击 `安装.command`
+4. 按提示完成安装，菜单栏会出现 MaaNotify 图标
+
+> 当前没有 Apple 开发者签名和公证。从浏览器下载后，macOS 可能提示“无法验证开发者”，右键“打开”或在“系统设置 → 隐私与安全性”里允许一次即可。
+
+### 方式二：ZIP
+
+下载 `MaaNotify-1.0.1.zip`，解压后运行：
 
 ```bash
-cd MaaNotify-1.0.0
+cd MaaNotify-1.0.1
 ./install_menuapp.sh
 ```
 
-发行包已经包含预构建 App，不需要 Xcode。
+### 首次配置
 
-### 方式 B：源码
-
-```bash
-git clone https://github.com/BestJarvan/maa-notify.git
-cd maa-notify
-./install_menuapp.sh
-```
-
-源码安装需要 Xcode Command Line Tools：
-
-```bash
-xcode-select --install
-```
-
-安装完成后，菜单栏会出现 MAA 图标。
-
-## 3. 首次配置
-
-第一次使用：
-
-### 第一步：选择 MAA 目录
-
-系统会弹出目录选择框，并默认打开：
+第一次打开会要求选择 MAA 的 Data 目录，默认位置是：
 
 ```text
 ~/Library/Containers/com.hguandl.MeoAsstMac/Data
 ```
 
-这是 MAA 在 macOS 上的固定位置，直接点“使用此目录”即可。如果 MAA 数据在别处，可以点“选择…”重新授权；设置窗口里的路径也可以手动修改，修改后点“应用目录”。
+确认目录后：
 
-App 只会读取这个目录。
+1. 打开设置窗口；
+2. 需要推送时填写消息机器人 Webhook；
+3. 不需要推送可以留空，直接关闭；
+4. 在“定时与自动启停”里确认监控时间；
+5. 点“保存并应用”。
 
-### 第二步：填消息机器人（可选）
+Webhook 默认固定显示 10 个圆点，点小眼睛或字段本身可以查看/编辑完整内容。
 
-**不填机器人也能正常使用**：监控、菜单状态、历史记录都会工作，只是不会发送消息。需要推送时再配置：
-
-1. 选机器人类型；
-2. 填 Webhook；
-3. 需要签名/关键词的机器人填对应字段；
-4. 点 **发送测试消息**；
-5. 点 **保存并应用**。
-
-Webhook 默认固定显示 10 个圆点，不按真实长度显示；点右侧小眼睛或字段本身可查看/编辑完整内容。
-
-### 第三步：确认定时
-
-设置窗口会显示：
-
-```text
-监控定时：07:02 / 19:01
-MAA 当前定时：07:02 / 19:01
-```
-
-“监控定时”是软件检测/启动 MAA 的时间数组，可以增删、手动输入。
-
-## 4. 菜单栏
-
-菜单只保留关键信息：
-
-```text
-MAA 监控 · 运行中
-上次：07:02 部分失败（7/8）
-定时：07:02 / 19:01
-————————————
-设置…
-打开日志
-————————————
-退出
-```
-
-点 **设置…** 可以完成所有配置。
-
-## 5. 设置窗口
-
-| 区域 | 能做什么 |
-|---|---|
-| 消息机器人 | 选择类型、Webhook、secret、keyword、发送测试（机器人可选） |
-| 定时与自动启停 | 增删监控定时、查看 MAA 当前定时、设置提前量和退出延迟 |
-| MAA 目录 | 默认路径可手动修改、选择目录、应用目录、打开目录、手动启动/退出 MAA |
-| 启动与外观 | 登录时自动启动、菜单栏图标 |
-| 高级 | 打开 JSON 配置、查看状态 |
-
-## 6. 消息机器人
-
-机器人是可选的。不填写时，软件仍会监控并更新菜单/历史，只是不会发送通知。
+## 消息机器人
 
 | 类型 | 说明 |
 |---|---|
-| 飞书 / Lark | 交互卡片，支持 secret 和 keyword |
+| 飞书 / Lark | 交互卡片，支持签名和关键词 |
 | 通用 Webhook | POST JSON，包含 `title`、`content`、`status`、`slot`、`report` |
-| Bark | 使用 Bark 的 `/push` 接口 |
+| Bark | 使用 Bark `/push` 接口 |
 | 钉钉 | Markdown 消息，支持加签 |
 | 企业微信 | Markdown 消息 |
 
-通用 Webhook 示例：
+机器人是**可选**的：
 
-```json
-{
-  "title": "⚠️ MAA 07:02 部分任务失败",
-  "content": "任务：7/8 完成\n...",
-  "status": "partial",
-  "slot": "07:02",
-  "date": "2026-11-26",
-  "report": {}
-}
+- 不填：正常监控、菜单状态、历史记录都可用；
+- 填了：在任务结束或漏跑时发送通知；
+- 不需要推送时，留空即可。
+
+## 工作方式
+
+```text
+MAA.app
+  ├─ gui.log
+  ├─ asst.log
+  └─ asst.bak.log
+          │
+          ▼
+  用户授权 Data 目录
+          │
+          ▼
+  MaaNotify.app
+  ├─ 镜像日志到 ~/Library/Application Support/MaaNotify/feed/
+  ├─ 启动/守护 Python watcher
+  └─ 菜单栏 + 设置窗口
+          │
+          ▼
+  maa_notify.py
+  ├─ 解析日志
+  ├─ 任务状态机
+  └─ 消息机器人
 ```
 
-高级配置支持：
+MaaNotify 通过系统文件选择框获得 MAA Data 目录的访问权限，再把日志镜像到自己的目录。Python 只读镜像目录，因此不需要给 Python 单独开“完全磁盘访问权限”。
 
-- `notify.headers`：自定义请求头；
-- `notify.body_template`：自定义 JSON 模板，占位符：
-  - `{{title}}`
-  - `{{content}}`
-  - `{{status}}`
-  - `{{slot}}`
-  - `{{report_json}}`
+## 自动启停与登录启动
 
-## 7. 自动启停 MAA
-
-在设置窗口开启：
+在设置窗口里可以开启：
 
 - 定时前自动启动 MAA；
 - 任务结束后自动退出 MAA；
 - 提前几分钟启动；
-- 报告发送后多少秒退出。
+- 报告发送后多少秒退出；
+- 登录时自动启动 MaaNotify。
 
 注意：
 
 - Mac 在启动时间点睡眠时不会执行；
-- MAA 更新通常 1 分钟左右，5 分钟提前量一般够用；
-- 自动退出优先使用 AppleScript，失败时用 `SIGTERM` 兜底。
+- 合盖、低电量或系统电源策略可能阻止唤醒；
+- 自动退出优先使用 AppleScript，失败时用 `SIGTERM` 兜底；
+- MAA 长期常驻时，自动退出后下次任务再启动，也会触发 MAA 启动时的更新检查。
 
-设置里的“登录时自动启动 MaaNotify”控制开机登录后是否自动运行本 App；关闭后仍可手动打开。
+睡眠唤醒尚未实现，已放入 [TODO](#todo)。
 
-## 8. 常见问题
+## 常见问题
 
 ### 没有收到消息
 
-- Webhook 是否填写，且不是 `REPLACE_ME`；
-- 点“发送测试消息”看具体错误；
-- 查看：
-  ```bash
-  tail -50 "$HOME/Library/Application Support/MaaNotify/menuapp/watcher.log"
-  ```
+- 是否填写了 Webhook；
+- Webhook 是否还是 `REPLACE_ME`；
+- 是否点了“发送测试消息”；
+- 查看日志：
+
+```bash
+tail -50 "$HOME/Library/Application Support/MaaNotify/menuapp/watcher.log"
+```
 
 ### 菜单栏没有图标
 
@@ -199,85 +192,73 @@ tail -30 "$HOME/Library/Application Support/MaaNotify/menuapp/launchd.err.log"
 
 ### 提示重新选择目录
 
-系统让 security-scoped bookmark 失效了。重新选择：
+系统让 security-scoped bookmark 失效了。重新选择默认目录：
 
 ```text
 ~/Library/Containers/com.hguandl.MeoAsstMac/Data
 ```
 
+也可以在设置里手动修改路径，然后点“应用目录”。
+
 ### 自动启停不生效
 
-- 确认设置里两个开关都打开；
+- 确认两个自动启停开关都打开；
 - 确认启动时间点 Mac 没有睡眠；
-- 确认 MAA 路径是 `/Applications/MAA.app`。
+- 确认 MAA 路径是 `/Applications/MAA.app`；
+- 确认 MaaNotify 的 watcher 正在运行。
 
-## 9. 数据与隐私
+## 隐私
 
-- Webhook、secret 只保存在本机 `config.json`，权限 600；
-- `config.json` 不在 Git 中；
-- App 只获得你选择的 MAA `Data` 目录访问权；
+- Webhook、secret 只保存在本机；
+- `config.json` 权限为 `600`；
+- 配置不会提交到 Git；
+- App 只获得你选择的 MAA Data 目录访问权；
 - Python 只读镜像目录；
 - 唯一外部网络请求是发送消息机器人 Webhook。
 
 ---
 
-# 第二部分：开发与维护
+# 开发与维护
 
-## 1. 架构
+## 技术栈
 
-```text
-MAA.app
-  ├─ gui.log
-  └─ asst.log
-        │
-        ▼
-MaaNotify.app（菜单栏）
-  ├─ 目录授权 + 日志镜像
-  ├─ 启动/守护 Python watcher
-  └─ 设置窗口
-        │
-        ▼
-maa_notify.py
-  ├─ 解析日志
-  ├─ 任务状态机
-  └─ 消息机器人
-```
+| 部分 | 技术 |
+|---|---|
+| 菜单栏 App | Swift + AppKit + SwiftUI |
+| 日志解析 / 状态机 / 通知 | Python 3.9+ 标准库 |
+| 后台运行 | LaunchAgent |
+| 构建 | `swiftc`，不需要 Xcode 工程 |
+| CI | GitHub Actions，macOS runner |
 
-App 通过系统文件选择框获得 MAA `Data` 目录访问权，把日志镜像到：
-
-```text
-~/Library/Application Support/MaaNotify/feed/
-```
-
-Python 只读这个镜像目录，因此不需要给 Python 开 FDA。
-
-## 2. 代码结构
+## 目录结构
 
 ```text
 maa-notify/
-├── maa_notify.py             # 解析/状态机/通知/CLI
-├── VERSION                   # 版本号
+├── maa_notify.py                 # 解析、状态机、通知、CLI
+├── VERSION                       # 版本号，当前 1.0.1
 ├── config.example.json
-├── install_menuapp.sh        # ZIP 安装脚本
-├── 安装.command               # DMG 双击安装入口
+├── install_menuapp.sh            # ZIP 安装脚本
+├── 安装.command                   # DMG 双击安装入口
 ├── uninstall_menuapp.sh
-├── install.sh                # 旧命令行/LaunchAgent 方式
-├── uninstall.sh
-├── CONTRIBUTING.md           # 提交与中文规范
-├── .github/CODEOWNERS        # 管理员审核规则
-├── .github/workflows/
-│   ├── pr-review.yml         # PR 测试 + 自动审批 + 标签
-│   └── release.yml           # main 构建 + GitHub Release
+├── .github/
+│   ├── CODEOWNERS                # 管理员审核规则（预留）
+│   └── workflows/
+│       ├── pr-review.yml         # PR 语法/安全/构建检查
+│       └── release.yml           # main 构建与 Release
 ├── menuapp/
-│   ├── MaaNotifyMenu.swift   # 主进程 / 菜单栏 / 镜像 / 守护
-│   ├── SettingsView.swift    # 设置窗口（SwiftUI）
+│   ├── MaaNotifyMenu.swift       # 主进程、菜单栏、镜像、守护
+│   ├── MenuPanelView.swift       # 自定义状态面板
+│   ├── SettingsView.swift        # 设置窗口
 │   ├── Info.plist
-│   ├── build.sh              # 编译 App
-│   └── package.sh            # 生成 zip + dmg
+│   ├── build.sh                  # 编译 App
+│   └── package.sh                # 生成 zip + dmg
 ├── tests/
 │   └── test_maa_notify.py
-├── LICENSE
-└── README.md
+├── docs/
+│   └── images/readme-hero.webp
+├── README.md
+├── CONTRIBUTING.md
+└── LICENSE
 ```
 
 运行数据：
@@ -290,9 +271,15 @@ maa-notify/
 ~/Library/LaunchAgents/com.jarvan.maa-notify.menu.plist
 ```
 
-## 3. 本地构建
+## 本地开发
 
-只编译 App：
+环境：
+
+- macOS 13+
+- Xcode Command Line Tools
+- Python 3.9+
+
+编译菜单栏 App：
 
 ```bash
 cd menuapp
@@ -300,27 +287,30 @@ cd menuapp
 open build/MaaNotify.app
 ```
 
-构建产物：
-
-```text
-menuapp/build/MaaNotify.app
-```
-
 安装到本机：
 
 ```bash
-cd ..
 ./install_menuapp.sh
 ```
 
-`install_menuapp.sh` 会：
+运行测试：
 
-1. 编译（如果源码里有 `menuapp/build.sh`）；
-2. 复制 App 到 `~/Applications`；
-3. 安装 Python 运行时和配置；
-4. 写入并加载 LaunchAgent。
+```bash
+PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s tests -v
+```
 
-## 4. 打包发行版
+当前 29 个测试，覆盖：
+
+- 同名刷理智任务映射；
+- 重试、失败、取消、超时；
+- 资源更新不触发运行开始；
+- 自动启动时间窗；
+- 自动退出状态；
+- 多消息机器人 payload；
+- 定时数组；
+- 真实日志回放（本机不存在时跳过）。
+
+## 打包
 
 ```bash
 ./menuapp/package.sh
@@ -329,10 +319,10 @@ cd ..
 产物：
 
 ```text
-dist/MaaNotify-1.0.0.zip
-dist/MaaNotify-1.0.0.zip.sha256
-dist/MaaNotify-1.0.0.dmg
-dist/MaaNotify-1.0.0.dmg.sha256
+dist/MaaNotify-1.0.1.zip
+dist/MaaNotify-1.0.1.zip.sha256
+dist/MaaNotify-1.0.1.dmg
+dist/MaaNotify-1.0.1.dmg.sha256
 ```
 
 两种包内容一致：
@@ -340,127 +330,127 @@ dist/MaaNotify-1.0.0.dmg.sha256
 - 预构建 `MaaNotify.app`
 - `maa_notify.py`
 - `config.example.json`
-- `install_menuapp.sh`（ZIP 用）
-- `安装.command`（DMG 双击用）
+- `install_menuapp.sh`（ZIP）
+- `安装.command`（DMG）
 - `README.md`
 - `LICENSE`
 
-解压/挂载后运行安装脚本即可，不需要 Xcode。
+## 分支管理规范
 
-> `MaaNotify.app` 本身不是完全独立的：它引用安装到 Application Support 的 Python 运行时和配置。请使用安装脚本，不要只拷贝 `.app`。
+### 分支命名
 
-## 5. 测试
+| 分支 | 用途 | 示例 |
+|---|---|---|
+| `main` | 稳定分支，只接受 PR | `main` |
+| `feat/*` | 新功能 | `feat/sleep-wake` |
+| `fix/*` | 缺陷修复 | `fix/menu-icon` |
+| `docs/*` | 文档 | `docs/readme` |
+| `chore/*` | CI、构建、杂项 | `chore/release-flow` |
 
-```bash
-cd maa-notify
-PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s tests -v
+### 基本规则
+
+- 不直接向 `main` 提交功能代码；
+- 从最新 `main` 切分支；
+- 一个 PR 只做一件事；
+- 提交信息使用简体中文；
+- PR 标题和描述使用简体中文；
+- 合并后删除功能分支。
+
+### 提交信息
+
+```text
+feat: 增加睡眠唤醒设置
+fix: 修复 webhook 输入框抖动
+docs: 重写 README
+chore: 调整发布工作流
 ```
 
-当前 29 个测试，覆盖：
+## PR 审核
 
-- 同名刷理智映射
-- 重试/失败/取消/超时
-- 资源更新不触发运行开始
-- 自动启动时间窗
-- 自动退出状态
-- 多消息机器人 payload
-- 定时数组
-- 真实日志回放（本机不存在时跳过）
+所有进入 `main` 的变更都必须通过 PR。
 
-## 6. 配置
+### 机器人检查
 
-完整模板见 [config.example.json](config.example.json)。
+`.github/workflows/pr-review.yml` 会执行：
 
-旧版 `feishu` 配置仍兼容；新配置使用 `notify`。
+| 检查 | 内容 |
+|---|---|
+| Python 语法 | `py_compile` |
+| Shell 语法 | `bash -n` |
+| plist | `plutil -lint` |
+| YAML | GitHub Actions 工作流解析 |
+| 敏感信息 | 私钥、Token、飞书 Webhook 特征扫描 |
+| 安全扫描 | CodeQL Python |
+| 构建 | Swift 编译、zip、dmg |
+| 完整性 | `hdiutil verify` |
 
-核心字段：
+全部通过后，机器人会：
 
-```json
-{
-  "notify": {
-    "provider": "feishu",
-    "webhook": "",
-    "secret": "",
-    "keyword": "MAA"
-  },
-  "maa": {
-    "schedule_times": ["07:02", "19:01"]
-  },
-  "policy": {
-    "auto_start_maa": true,
-    "auto_quit_maa": true,
-    "auto_start_lead_minutes": 5,
-    "auto_quit_delay_seconds": 60
-  }
-}
+- 提交 `APPROVED` 审批；
+- 打上 `机器人审核通过` 标签；
+- 留言提示仍需人工复核。
+
+失败会打上 `需要修复`。
+
+### 合并条件
+
+当前是单人维护模式：
+
+```text
+PR
++ 机器人语法/安全检查通过
++ 构建通过
++ 管理员自审
+= 可以合并
 ```
 
-## 7. 扩展点
+原因是 GitHub 不允许 PR 作者审批自己的 PR。只有一个管理员账号时，无法同时满足“机器人审批”和“独立管理员审批”。
 
-- 新消息机器人：在 `maa_notify.py` 的 `get_notify` / `build_feishu_payload` / `send_notification` 增加 provider；
-- 新日志解析：改 `Run.handle_event` 和 `is_run_start_message`；
-- 新任务类型：`TASK_LABEL_BY_KEY`、`TASK_KEY_BY_ALIAS`；
-- 新菜单/设置项：`SettingsView.swift` + `MaaNotifyMenu.swift`；
-- 新镜像文件：`MirrorEngine.specs`。
+如果以后增加第二个管理员/审核账号，可以开启严格模式：
 
-## 8. 发布流程
+- 至少 1 个管理员审批；
+- Code Owner 审批；
+- 管理员也不可绕过；
+- 仍然必须通过机器人和构建检查。
 
-版本号在仓库根目录的 `VERSION` 文件中维护。当前：
+### 标签
+
+| 标签 | 含义 |
+|---|---|
+| `机器人审核通过` | 自动检查全部通过 |
+| `需要修复` | 自动检查失败 |
+
+## 发布流程
+
+版本号在根目录 `VERSION` 中维护：
 
 ```bash
 cat VERSION
-# 1.0.0
+# 1.0.1
 ```
 
-PR 合并到 `main` 后，GitHub Actions 会重新运行测试，并根据变更类型决定是否发版：
+PR 合并到 `main` 后，`.github/workflows/release.yml` 会：
 
-- 只有文档/CI 变更：不构建二进制；
-- 有代码、构建脚本或版本号变更：构建 zip 和 dmg，创建 `v$(cat VERSION)` 标签，并创建 GitHub Release。
-
-如果该版本 Release 已存在，也会跳过发布，避免重复。
-
-## 9. PR 自动审核
-
-从其他分支向 `main` 提交 PR 时，会触发 `.github/workflows/pr-review.yml`：
-
-1. 运行 29 个 Python 测试；
-2. 检查 Python、Shell、plist、GitHub Actions YAML 语法；
-3. 运行敏感信息扫描；
-4. 运行 CodeQL Python 安全扫描；
-5. 编译 Swift 菜单栏 App；
-6. 同时构建 zip 和 dmg，并校验 dmg；
-7. 全部通过后机器人提交审批，并打上 `机器人审核通过` 标签；
-8. 失败则打上 `需要修复` 标签并留言。
-
-单人维护模式下，不再强制独立管理员审批。GitHub 不允许 PR 作者审批自己的 PR，只有一个管理员账号时无法同时满足“机器人审批”和“管理员审批”。
-
-当前策略：
-
-- 必须通过 PR 合并；
-- 必须通过 `检查与构建` 和 `安全扫描`；
-- 机器人审批只代表自动检查通过，不代表人工复核；
-- 管理员自审后可以合并；
-- 添加第二个管理员/审核账号后，可重新开启 `enforce_admins`、`required_approving_review_count` 和 Code Owner 审核。
-
-PR 合并到 `main` 后，`.github/workflows/release.yml` 会先判断本次变更内容：
-
-- 只修改 `README.md`、`CONTRIBUTING.md`、`LICENSE`、CI 配置等文档/流程文件：只跑检查，不构建二进制，不创建 Release；
-- 修改 `maa_notify.py`、`VERSION`、`menuapp/`、`tests/`、安装脚本等代码或构建文件：重新构建 zip 和 dmg，并创建 GitHub Release。
-
-如果 `v$(cat VERSION)` 已发布，也会跳过构建，避免重复。
-
-## 10. 中文规范
-
-- Git 提交信息统一使用简体中文；
-- PR 标题、PR 描述、CI 步骤名、脚本输出和用户提示以简体中文为主；
-- 第三方工具自身输出的英文（例如 Swift 编译器、unittest）保持原样，不强行翻译；
-- 当前线上版本基线为 `1.0.0`，后续功能迭代再升级版本号。
+1. 检查该版本是否已发布；
+2. 运行测试；
+3. 构建 zip 和 dmg；
+4. 校验 dmg；
+5. 创建 `v$(cat VERSION)` 标签和 GitHub Release。
 
 ## TODO
 
-- [ ] 任务前自动唤醒睡眠中的 Mac（`pmset` + 可选 root LaunchDaemon；需要管理员授权，暂不实现）
+- [ ] 任务前自动唤醒睡眠中的 Mac
 - [ ] 唤醒时间与 07:02 / 19:01 两个监控时段联动
 - [ ] 唤醒助手安装/卸载与设置面板状态展示
+- [ ] 增加第二个管理员后开启严格 PR 审批
+
+## 贡献
+
+提交前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)：
+
+- 提交信息、PR 标题和描述使用简体中文；
+- 一个 PR 只做一件事；
+- 功能改动补测试；
 
 ## License
 
