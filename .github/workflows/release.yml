@@ -19,13 +19,52 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       exists: ${{ steps.release.outputs.exists }}
+      docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 读取版本号
         id: version
         run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: 判断是否仅文档变更
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "手动触发，按代码变更处理。"
+            exit 0
+          fi
+
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            FILES="$(git show --pretty="" --name-only "$AFTER")"
+          else
+            FILES="$(git diff --name-only "$BEFORE" "$AFTER")"
+          fi
+
+          echo "本次变更文件："
+          echo "$FILES"
+
+          if [ -z "$FILES" ]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "没有检测到文件变更，跳过构建发布。"
+            exit 0
+          fi
+
+          # 代码、构建脚本、测试、版本号等发生变化时才需要发版。
+          if echo "$FILES" | grep -Eq '^(maa_notify\.py|VERSION|config\.example\.json|install\.sh|install_menuapp\.sh|uninstall\.sh|uninstall_menuapp\.sh|安装\.command|menuapp/|tests/|scripts/)'; then
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "检测到代码或构建相关变更，需要构建发布。"
+          else
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "本次仅文档或 CI 配置变更，跳过构建发布。"
+            echo "本次仅文档或 CI 配置变更，已跳过构建发布。" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: 检查是否已发布
         id: release
@@ -44,7 +83,7 @@ jobs:
   release:
     name: 构建并发布
     needs: check
-    if: needs.check.outputs.exists == 'false'
+    if: needs.check.outputs.exists == 'false' && needs.check.outputs.docs_only == 'false'
     runs-on: macos-latest
     env:
       VERSION: ${{ needs.check.outputs.version }}
