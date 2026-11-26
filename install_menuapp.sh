@@ -47,7 +47,22 @@ if [ ! -f "$SUPPORT/app/config.json" ]; then
 fi
 
 # 4. LaunchAgent
+# 升级安装时保留用户之前选择的“登录时自动启动”状态。
 mkdir -p "$HOME/Library/LaunchAgents" "$SUPPORT/menuapp" "$SUPPORT/feed"
+LOGIN_ITEM="true"
+if [ -f "$PLIST" ]; then
+  PREV_LOGIN_ITEM="$(/usr/bin/plutil -extract RunAtLoad raw -o - "$PLIST" 2>/dev/null || true)"
+  if [ "$PREV_LOGIN_ITEM" = "false" ]; then
+    LOGIN_ITEM="false"
+  fi
+fi
+KEEPALIVE=""
+if [ "$LOGIN_ITEM" = "true" ]; then
+  KEEPALIVE='  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>'
+fi
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -58,11 +73,8 @@ cat > "$PLIST" <<EOF
   <array>
     <string>$APP_DEST/Contents/MacOS/MaaNotify</string>
   </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key><false/>
-  </dict>
+  <key>RunAtLoad</key><$LOGIN_ITEM/>
+$KEEPALIVE
   <key>LimitLoadToSessionType</key><string>Aqua</string>
   <key>ProcessType</key><string>Interactive</string>
   <key>ThrottleInterval</key><integer>10</integer>
@@ -73,9 +85,11 @@ cat > "$PLIST" <<EOF
 EOF
 /usr/bin/plutil -lint "$PLIST" >/dev/null
 
+launchctl enable "gui/$UID_VALUE/$LABEL" 2>/dev/null || true
 launchctl bootout "gui/$UID_VALUE" "$PLIST" 2>/dev/null || true
 launchctl bootstrap "gui/$UID_VALUE" "$PLIST"
-launchctl enable "gui/$UID_VALUE/$LABEL" 2>/dev/null || true
+# 即使用户关闭了登录自启，安装/升级后也先启动一次，方便继续配置。
+launchctl kickstart -k "gui/$UID_VALUE/$LABEL" 2>/dev/null || true
 
 sleep 2
 echo
@@ -84,7 +98,11 @@ echo "菜单栏出现 MAA 图标后，第一次会要求选择 MAA 的 Data 目�
 echo "  ~/Library/Containers/com.hguandl.MeoAsstMac/Data"
 echo
 echo "首次安装默认 live（实际执行）；自动启停默认关闭，机器人不填也能监控。"
-echo "登录时自动启动默认开启，可在设置窗口关闭。"
+if [ "$LOGIN_ITEM" = "true" ]; then
+  echo "登录时自动启动：开启（可在设置窗口关闭）。"
+else
+  echo "登录时自动启动：已保留之前的关闭设置（可在设置窗口重新开启）。"
+fi
 echo "配置文件：$SUPPORT/app/config.json"
 echo "日志：$SUPPORT/menuapp/watcher.log"
 echo "卸载：$SRC/uninstall_menuapp.sh"
