@@ -260,14 +260,16 @@ APP="$HOME/Library/Application Support/MaaNotify/app"
 /usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" schedule
 
 # 写入 MAA 定时（会让 MAA 退出再启动）
-/usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json"   sync-maa-schedule --times "07:02,19:01"
+/usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" \
+  sync-maa-schedule --times "07:02,19:01"
 ```
 
-注意：这会改动 MAA 的偏好设置；如果 MAA 正在执行任务，会被中断。不要在任务进行中操作。
+注意：这会改动 MAA 的偏好设置；如果 MAA 正在执行任务，会被中断，不要任务进行中操作。
 
-注意：
+其他注意：
 
 - 只有 live 模式会启停 MAA；dry-run 不会。
+- 如果修改了“监控定时”，上面的 06:57 / 07:02 示例会随数组中的时间变化。
 - 如果 Mac 在 06:57 / 18:56 处于睡眠，自动启动不会执行。
 - MAA 更新通常 1 分钟左右，5 分钟提前量一般足够；如果更新弹窗需要手动确认，可能跨过定时，监控会发“未检测到运行”卡片。
 - 自动退出优先使用 AppleScript，失败时用 `SIGTERM` 兜底。
@@ -443,7 +445,8 @@ STATE="$HOME/Library/Application Support/MaaNotify/menuapp/state"
 
 # 查看/写入定时
 /usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" schedule
-/usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json"   sync-maa-schedule --times "07:02,19:01"
+/usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" \
+  sync-maa-schedule --times "07:02,19:01"
 
 # 检查权限/配置
 /usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" doctor
