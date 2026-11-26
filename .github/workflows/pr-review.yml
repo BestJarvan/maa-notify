@@ -34,6 +34,20 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
           echo "Python 测试通过。"
 
+      - name: 代码语法检查
+        run: |
+          echo "检查 Python 语法……"
+          python3 -m py_compile maa_notify.py tests/test_maa_notify.py
+          echo "检查 Shell 语法……"
+          for file in install.sh install_menuapp.sh uninstall.sh uninstall_menuapp.sh menuapp/build.sh menuapp/package.sh 安装.command; do
+            bash -n "$file"
+          done
+          echo "检查 plist……"
+          plutil -lint menuapp/Info.plist
+          echo "检查 GitHub Actions YAML……"
+          ruby -ryaml -e 'ARGV.each { |f| YAML.load_file(f) }' .github/workflows/*.yml
+          echo "语法检查通过。"
+
       - name: 构建 zip 和 dmg
         run: |
           echo "开始构建 zip 和 dmg……"
@@ -60,9 +74,38 @@ jobs:
             dist/MaaNotify-*.sha256
           if-no-files-found: error
 
+  security:
+    name: 安全扫描
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 敏感信息扫描
+        run: |
+          echo "扫描疑似密钥与私钥……"
+          if git grep -nEI '(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|https://open\.feishu\.cn/open-apis/bot/v2/hook/[0-9a-f-]{20,})' -- . ':!README.md' ':!tests/*'; then
+            echo "::error::发现疑似密钥，请移除后再提交。"
+            exit 1
+          fi
+          echo "未发现明显密钥。"
+
+      - name: 初始化 CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: 执行 CodeQL 分析
+        uses: github/codeql-action/analyze@v3
+
   approve:
     name: 自动审批
-    needs: verify
+    needs: [verify, security]
     if: >-
       success() &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -74,22 +117,22 @@ jobs:
     steps:
       - name: 创建标签
         run: |
-          gh label create "自动审核通过" --color 0E8A16 \
-            --description "自动检查通过并由机器人审批" --force
+          gh label create "机器人审核通过" --color 0E8A16 \
+            --description "机器人完成语法、安全和构建检查" --force
           gh label create "需要修复" --color D93F0B \
             --description "自动检查未通过" --force
 
       - name: 审批 PR 并打标签
         run: |
           gh pr review "$PR_NUMBER" --approve --body \
-            "自动检查通过：Python 测试、Swift 构建、zip 与 dmg 打包、dmg 校验均成功。"
-          gh pr edit "$PR_NUMBER" --add-label "自动审核通过" --remove-label "需要修复" || true
+            "机器人审核通过：语法检查、CodeQL 安全扫描、敏感信息扫描、Swift 构建、zip 与 dmg 打包、dmg 校验均成功。仍需至少 1 名管理员审批后才能合并。"
+          gh pr edit "$PR_NUMBER" --add-label "机器人审核通过" --remove-label "需要修复" || true
           gh pr comment "$PR_NUMBER" --body \
-            "✅ 自动审核通过，已由机器人审批。合并后会自动构建并发布 GitHub Release。"
+            "✅ 机器人审核通过。仍需至少 1 名管理员审批后才能合并；合并后才会触发发布流程。"
 
   needs-fix:
     name: 标记未通过
-    needs: verify
+    needs: [verify, security]
     if: >-
       failure() &&
       github.event.pull_request.head.repo.full_name == github.repository

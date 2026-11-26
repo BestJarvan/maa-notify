@@ -264,6 +264,7 @@ maa-notify/
 ├── install.sh                # 旧命令行/LaunchAgent 方式
 ├── uninstall.sh
 ├── CONTRIBUTING.md           # 提交与中文规范
+├── .github/CODEOWNERS        # 管理员审核规则
 ├── .github/workflows/
 │   ├── pr-review.yml         # PR 测试 + 自动审批 + 标签
 │   └── release.yml           # main 构建 + GitHub Release
@@ -411,27 +412,36 @@ cat VERSION
 # 1.0.0
 ```
 
-PR 合并到 `main` 后，GitHub Actions 会：
+PR 合并到 `main` 后，GitHub Actions 会重新运行测试，并根据变更类型决定是否发版：
 
-1. 重新运行测试；
-2. 构建 zip 和 dmg；
-3. 创建 `v$(cat VERSION)` 标签；
-4. 创建 GitHub Release 并上传两个安装包。
+- 只有文档/CI 变更：不构建二进制；
+- 有代码、构建脚本或版本号变更：构建 zip 和 dmg，创建 `v$(cat VERSION)` 标签，并创建 GitHub Release。
 
-如果该版本标签已存在，工作流会跳过发布，避免重复。
+如果该版本 Release 已存在，也会跳过发布，避免重复。
 
 ## 9. PR 自动审核
 
 从其他分支向 `main` 提交 PR 时，会触发 `.github/workflows/pr-review.yml`：
 
 1. 运行 29 个 Python 测试；
-2. 编译 Swift 菜单栏 App；
-3. 同时构建 zip 和 dmg；
-4. 校验 dmg；
-5. 通过后机器人自动审批，并打上 `自动审核通过` 标签；
-6. 失败则打上 `需要修复` 标签并留言。
+2. 检查 Python、Shell、plist、GitHub Actions YAML 语法；
+3. 运行敏感信息扫描；
+4. 运行 CodeQL Python 安全扫描；
+5. 编译 Swift 菜单栏 App；
+6. 同时构建 zip 和 dmg，并校验 dmg；
+7. 全部通过后机器人提交审批，并打上 `机器人审核通过` 标签；
+8. 失败则打上 `需要修复` 标签并留言。
 
-PR 合并到 `main` 后，`.github/workflows/release.yml` 会重新构建，并自动创建 GitHub Release，上传 zip、dmg 和校验文件。若 `v$(cat VERSION)` 已发布，则跳过，避免重复。
+> 机器人审批不等于可以合并。`main` 分支还需要至少 1 名管理员的独立审批（CODEOWNERS：`@BestJarvan`），机器人审批不能替代管理员审批。
+
+> GitHub 不允许 PR 作者审批自己的 PR。如果仓库只有一个管理员账号，需要再增加一个管理员/审核账号，否则无法同时满足“机器人审批”和“管理员审批”。
+
+PR 合并到 `main` 后，`.github/workflows/release.yml` 会先判断本次变更内容：
+
+- 只修改 `README.md`、`CONTRIBUTING.md`、`LICENSE`、CI 配置等文档/流程文件：只跑检查，不构建二进制，不创建 Release；
+- 修改 `maa_notify.py`、`VERSION`、`menuapp/`、`tests/`、安装脚本等代码或构建文件：重新构建 zip 和 dmg，并创建 GitHub Release。
+
+如果 `v$(cat VERSION)` 已发布，也会跳过构建，避免重复。
 
 ## 10. 中文规范
 
