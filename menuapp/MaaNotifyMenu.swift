@@ -807,7 +807,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let folder = sourceURL?.path
             ?? (try? String(contentsOf: kBookmarkPath, encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? ""
+            ?? kDefaultMaaDataPath
 
         let provider = (notify["provider"] as? String) ?? "feishu"
         let webhook = (notify["webhook"] as? String)
@@ -874,17 +874,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 save: { [weak self] in self?.saveSettings() },
                 test: { [weak self] in self?.testWebhook() },
                 chooseFolder: { [weak self] in
-                    self?.promptForFolder(preferred: self?.sourceURL) {
-                        self?.refreshSettingsModel()
-                        self?.settingsModel?.status = "MAA 目录已更新。"
+                    guard let self else { return }
+                    let typed = self.settingsModel?.folderPath ?? ""
+                    let expanded = NSString(string: typed).expandingTildeInPath
+                    let preferred = expanded.isEmpty
+                        ? kDefaultMaaDataURL
+                        : URL(fileURLWithPath: expanded)
+                    self.promptForFolder(preferred: preferred) {
+                        self.refreshSettingsModel()
+                        self.settingsModel?.status = "MAA 目录已更新。"
                     }
                 },
-                useDefaultFolder: { [weak self] in
-                    self?.promptForFolder(preferred: kDefaultMaaDataURL) {
-                        self?.refreshSettingsModel()
-                        self?.settingsModel?.status = "已使用默认 MAA 目录。"
-                    }
-                },
+                applyFolder: { [weak self] in self?.applyFolderFromSettings() },
                 readMAA: { [weak self] in
                     self?.settingsModel?.scheduleTimes = self?.readMaaScheduleList() ?? []
                     self?.settingsModel?.status = "已从 MAA 读取定时。"
@@ -1071,6 +1072,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             syncProcess = nil
             model.status = "写入 MAA 定时失败：\(error.localizedDescription)"
         }
+    }
+
+    private func applyFolderFromSettings() {
+        guard let model = settingsModel else { return }
+        let raw = model.folderPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else {
+            model.status = "请填写 MAA Data 目录。"
+            return
+        }
+        let expanded = NSString(string: raw).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded)
+        guard let dataURL = normalizeSource(url), validateSource(dataURL) else {
+            let alert = NSAlert()
+            alert.messageText = "无法读取这个目录"
+            alert.informativeText = """
+            请确认路径指向 MAA 的 Data 目录，并且已经授权：
+            \(expanded)
+
+            如果路径正确但读不到，请点“选择…”重新授权。
+            """
+            alert.alertStyle = .warning
+            alert.runModal()
+            model.status = "目录不可读，请用“选择…”授权。"
+            return
+        }
+        sourceURL = dataURL
+        saveBookmark(dataURL)
+        startMonitoring()
+        refreshSettingsModel()
+        settingsModel?.status = "MAA 目录已应用。"
     }
 
     private func startMAA() {

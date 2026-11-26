@@ -5,6 +5,8 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd -P)"
 OUT="${1:-$SRC/build}"
 APP="$OUT/MaaNotify.app"
+VERSION="${MAA_NOTIFY_VERSION:-$(cat "$SRC/../VERSION" 2>/dev/null || echo 1.0.0)}"
+BUILD_NUMBER="${MAA_NOTIFY_BUILD:-1}"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -15,6 +17,8 @@ swiftc -O -swift-version 5 -framework Cocoa -framework SwiftUI \
   "$SRC/MaaNotifyMenu.swift" "$SRC/SettingsView.swift"
 
 cp "$SRC/Info.plist" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 /usr/bin/plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 echo "签名（ad-hoc）…"
