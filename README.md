@@ -2,7 +2,7 @@
 
 一个运行在 macOS 上的 **MAA（MaaAssistantArknights）运行状态监控**。
 
-它会读取 MAA 的日志，判断每天 07:02 / 19:01 两次定时任务是否成功、哪些任务失败、失败原因，并通过飞书自定义机器人推送卡片。附带的菜单栏 App 可以在不需要“完全磁盘访问权限”的情况下读取 MAA 的 sandbox 日志。
+它会读取 MAA 的日志，判断定时任务的执行结果、哪些任务失败、失败原因，并通过消息机器人推送。默认支持飞书 / Lark，也支持通用 Webhook、Bark、钉钉、企业微信。附带的菜单栏 App 可以在不需要“完全磁盘访问权限”的情况下读取 MAA 的 sandbox 日志。
 
 > 默认只读 MAA：不操作游戏，不修改 MAA 配置或日志。  
 > “自动启停 MAA”是可选功能，默认关闭；启用后才会启动/退出 MAA。
@@ -19,18 +19,22 @@
   - `StageResource` → 关卡识别失败
   - `connectFailed` → 连接模拟器失败
   - `StartTasksFailed` → 启动任务失败
-- 飞书交互卡片：成功 / 部分失败 / 失败 / 取消 / 超时 / 未运行。
+- 消息推送：
+  - 飞书 / Lark 交互卡片；
+  - 通用 Webhook（JSON）；
+  - Bark、钉钉、企业微信；
+  - 成功 / 部分失败 / 失败 / 取消 / 超时 / 未运行。
 - macOS 菜单栏 App：
   - 文件选择框只授权 MAA 的 `Data` 目录，**不需要 FDA**；
   - 日志镜像到 App 自己的目录，Python watcher 读镜像；
   - 菜单栏查看同步状态、上次结果、日志；
-  - 更换图标、重新选择目录、开启/关闭飞书推送。
+  - 更换图标、重新选择目录、开启/关闭消息推送。
 - 可选自动启停 MAA：
   - 定时前 5 分钟检查，没运行就启动；
   - 每场报告发送后 60 秒退出 MAA；
   - 下一场前再启动。
 - 无第三方 Python 依赖，只用标准库。
-- 21 个回归测试。
+- 27 个回归测试。
 
 ---
 
@@ -53,7 +57,7 @@ Python watcher
    ├─ 读 feed/gui.log、feed/asst.log
    ├─ 按 Default.plist 顺序映射任务实例
    ├─ 状态机判定
-   └─ 飞书自定义机器人 Webhook
+   └─ 消息机器人 Webhook（飞书 / 通用 / Bark / 钉钉 / 企业微信）
 ```
 
 为什么需要镜像：MAA 的日志在 `~/Library/Containers/com.hguandl.MeoAsstMac/...`，launchd 后台进程默认读不到。菜单栏 App 通过用户选择目录获得访问权，把日志复制到 `~/Library/Application Support/MaaNotify/feed/`，Python 只读镜像，因此不需要给 Python 开“完全磁盘访问权限”。
@@ -66,7 +70,7 @@ Python watcher
 
 - macOS 13 或更高版本
 - 已安装 [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)（`/Applications/MAA.app`）
-- 飞书群自定义机器人 Webhook
+- 任意一种消息机器人 Webhook（飞书 / Lark、通用 Webhook、Bark、钉钉、企业微信）
 - Python 3.9+（macOS 自带 `/usr/bin/python3` 即可）
 - 构建菜单栏 App 需要 Xcode Command Line Tools（`xcode-select --install`）
 
@@ -108,22 +112,32 @@ App 只会读取这个目录，不需要“完全磁盘访问权限”。
 
 点菜单栏 MAA 图标 → **设置…**，不用手改 JSON。
 
-**飞书机器人**
+**消息机器人**
 
-1. 在飞书群打开“群设置 → 群机器人 → 添加机器人 → 自定义机器人”；
-2. 复制 Webhook；
-3. 粘贴到设置窗口的“飞书机器人”一栏；
-4. 机器人开了签名校验就填 `secret`，设置了关键词就填 `keyword`；
-5. 点击 **发送测试消息**，飞书收到卡片即成功；
-6. 打开 **启用飞书推送**，点 **保存并应用**。
+1. 选择机器人类型：飞书 / Lark、通用 Webhook、Bark、钉钉、企业微信；
+2. 粘贴对应的 Webhook 地址；
+3. 需要签名校验的机器人（飞书 / 钉钉）填写 `secret`；
+4. 设置了关键词的机器人填写 `keyword`；
+5. 点击 **发送测试消息** 验证；
+6. 打开 **启用消息推送**，点 **保存并应用**。
+
+不同机器人收到的格式不同：
+
+- 飞书：交互卡片；
+- 通用 Webhook：包含 `title`、`content`、`status`、`slot`、`report` 的 JSON；
+- Bark：`title` + `body`；
+- 钉钉 / 企业微信：Markdown。
 
 **定时与自动启停**
 
-设置窗口会自动显示从 MAA 读取的定时，例如：
+设置窗口里“监控定时”是一个可增删的时间数组，例如：
 
 ```text
-MAA 定时：07:02 / 19:01
+07:02
+19:01
 ```
+
+这个数组决定软件何时检测/启动 MAA。MAA 自己的定时任务在“MAA 当前定时”里显示，两者可以不同；如果希望 MAA 也按新时间执行，点 **写入 MAA 定时…**。
 
 可以设置：
 
@@ -170,8 +184,8 @@ MAA 监控 · 运行中
 
 | 区域 | 内容 |
 |---|---|
-| 飞书机器人 | Webhook、secret、keyword、启用推送、发送测试消息 |
-| 定时与自动启停 | MAA 定时（自动读取）、提前启动分钟数、结束后退出延迟 |
+| 消息机器人 | 类型（飞书/通用/Bark/钉钉/企业微信）、Webhook、secret、keyword、启用推送、测试 |
+| 定时与自动启停 | 监控定时数组、MAA 当前定时、写入 MAA、提前启动、退出延迟 |
 | MAA 目录 | 重新选择、打开目录、启动/退出 MAA |
 | 外观 | 天线/手柄/盾牌/闪电/波形/MAA 文字/MAA App 图标 |
 | 高级 | 打开 JSON 配置、查看状态 |
@@ -198,6 +212,9 @@ open -a "$HOME/Applications/MaaNotify.app" --args --settings
 在 **设置 → 定时与自动启停** 开启，或在配置中设置：
 
 ```json
+"maa": {
+  "schedule_times": ["07:02", "19:01"]
+},
 "policy": {
   "auto_start_maa": true,
   "auto_quit_maa": true,
@@ -205,6 +222,8 @@ open -a "$HOME/Applications/MaaNotify.app" --args --settings
   "auto_quit_delay_seconds": 60
 }
 ```
+
+“监控定时”可以不同于 MAA 自己的定时。改完后如果希望 MAA 也在新时间执行，使用设置窗口的 **写入 MAA 定时…**；这会修改 MAA 的 `MAAScheduledDailyTaskTimer`，可能退出并重启 MAA。
 
 行为：
 
@@ -216,6 +235,35 @@ open -a "$HOME/Applications/MaaNotify.app" --args --settings
 19:01  MAA 定时执行
 19:2x  自动退出 MAA
 ```
+
+### 修改 MAA 自己的定时
+
+软件**可以**修改 MAA 的 `MAAScheduledDailyTaskTimer`，但不是自动的：
+
+1. 在设置窗口的“监控定时”里增删时间；
+2. 点 **写入 MAA 定时…**；
+3. 确认弹窗；
+4. 软件会先退出 MAA（如果正在运行），写入定时，再重新启动 MAA。
+
+写入前会备份旧值：
+
+```text
+~/Library/Application Support/MaaNotify/maa-schedule-backup.json
+```
+
+也可以用 CLI：
+
+```bash
+APP="$HOME/Library/Application Support/MaaNotify/app"
+
+# 查看当前生效的监控定时
+/usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" schedule
+
+# 写入 MAA 定时（会让 MAA 退出再启动）
+/usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json"   sync-maa-schedule --times "07:02,19:01"
+```
+
+注意：这会改动 MAA 的偏好设置；如果 MAA 正在执行任务，会被中断。不要在任务进行中操作。
 
 注意：
 
@@ -286,7 +334,7 @@ MAA 的 `Default.plist` 里可能有多个同名“刷理智”。工具按配�
 
 ---
 
-## 飞书卡片示例
+## 消息卡片示例（飞书）
 
 ```text
 ⚠️ MAA 07:02 部分任务失败
@@ -309,17 +357,24 @@ MAA 的 `Default.plist` 里可能有多个同名“刷理智”。工具按配�
 
 ## 配置说明
 
-`config.json` 与 `config.example.json` 结构一致。
+`config.json` 与 `config.example.json` 结构一致。  
+旧版的 `feishu` 配置仍然兼容；新配置使用 `notify`。
 
 ```json
 {
-  "feishu": {
+  "notify": {
+    "provider": "feishu",
     "webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME",
     "secret": "",
     "keyword": "MAA",
+    "headers": {},
+    "body_template": "",
     "notify_on_success": true,
     "notify_on_partial": true,
     "notify_on_missed": true
+  },
+  "maa": {
+    "schedule_times": ["07:02", "19:01"]
   },
   "policy": {
     "grace_minutes": 30,
@@ -341,22 +396,24 @@ MAA 的 `Default.plist` 里可能有多个同名“刷理智”。工具按配�
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `feishu.webhook` | 空 | 飞书自定义机器人 Webhook |
-| `feishu.secret` | 空 | 签名校验密钥 |
-| `feishu.keyword` | `MAA` | 机器人关键词 |
-| `feishu.notify_on_success` | `true` | 成功是否推送 |
-| `feishu.notify_on_partial` | `true` | 部分失败是否推送 |
-| `feishu.notify_on_missed` | `true` | 未运行是否推送 |
+| `notify.provider` | `feishu` | `feishu` / `generic` / `bark` / `dingtalk` / `wecom` |
+| `notify.webhook` | 空 | 机器人 Webhook |
+| `notify.secret` | 空 | 飞书/钉钉签名密钥 |
+| `notify.keyword` | `MAA` | 机器人关键词 |
+| `notify.headers` | `{}` | 通用 Webhook 自定义请求头 |
+| `notify.body_template` | 空 | 通用 Webhook 自定义 JSON 模板 |
+| `notify.notify_on_*` | `true` | 成功/部分失败/未运行是否推送 |
+| `maa.schedule_times` | `[]` | 监控定时数组；为空则读 MAA |
+| `policy.auto_start_maa` | `false` | 定时前自动启动 MAA |
 | `policy.grace_minutes` | `30` | 定时后多久仍无运行判“未检测到” |
 | `policy.idle_timeout_minutes` | `15` | 多久无日志增长判卡死 |
 | `policy.hard_timeout_minutes` | `180` | 单场运行硬上限 |
 | `policy.optional_tasks` | `[]` | 可忽略失败的任务显示名 |
 | `policy.include_closedown` | `false` | 是否把关闭游戏纳入完成率 |
-| `policy.auto_start_maa` | `false` | 定时前自动启动 MAA |
 | `policy.auto_quit_maa` | `false` | 每场结束后自动退出 MAA |
 | `policy.auto_start_lead_minutes` | `5` | 提前多少分钟启动 |
 | `policy.auto_quit_delay_seconds` | `60` | 报告后多少秒退出 |
-| `runtime.dry_run` | `true`（菜单栏首次） | 只写日志，不发飞书 |
+| `runtime.dry_run` | `true`（菜单栏首次） | 只写日志，不发消息 |
 
 ---
 
@@ -381,8 +438,12 @@ STATE="$HOME/Library/Application Support/MaaNotify/menuapp/state"
 /usr/bin/python3 -B "$APP/maa_notify.py" --config "$CFG" --state-dir "$STATE" replay \
   --date 2026-11-23 --slot 07:02 --send
 
-# 测试飞书
+# 测试消息机器人
 /usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" test
+
+# 查看/写入定时
+/usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" schedule
+/usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json"   sync-maa-schedule --times "07:02,19:01"
 
 # 检查权限/配置
 /usr/bin/python3 -B "$APP/maa_notify.py" --config "$APP/config.json" doctor
@@ -394,7 +455,7 @@ STATE="$HOME/Library/Application Support/MaaNotify/menuapp/state"
 
 ```text
 maa-notify/
-├── maa_notify.py             # Python 解析/状态机/飞书/CLI
+├── maa_notify.py             # Python 解析/状态机/通知/CLI
 ├── config.example.json       # 配置模板
 ├── install_menuapp.sh        # 菜单栏版安装
 ├── uninstall_menuapp.sh      # 菜单栏版卸载
@@ -432,7 +493,7 @@ launchctl print gui/$(id -u)/com.jarvan.maa-notify.menu
 tail -30 "$HOME/Library/Application Support/MaaNotify/menuapp/launchd.err.log"
 ```
 
-### 没有收到飞书
+### 没有收到消息
 
 ```bash
 # 确认 dry_run=false
@@ -443,7 +504,7 @@ tail -50 "$HOME/Library/Application Support/MaaNotify/menuapp/watcher.log"
 ```
 
 - Webhook 还是 `REPLACE_ME`：处于 dry-run。
-- 日志出现“飞书推送失败”：检查 Webhook、签名、关键词、网络。
+- 日志出现“消息推送失败”：检查机器人类型、Webhook、签名、关键词、网络。
 - 失败消息会进入 `pending` 队列，每 60 秒重试。
 
 ### 提示 `Operation not permitted`
@@ -487,7 +548,8 @@ PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s tests -v
 - 资源更新不触发运行开始
 - 自动启动时间窗
 - 自动退出状态
-- 飞书卡片结构
+- 消息卡片/通用 payload 结构
+- 定时数组与 MAA 定时覆盖
 - 真实日志回放（本机日志不存在时自动跳过）
 
 构建菜单栏 App：
@@ -507,7 +569,7 @@ open build/MaaNotify.app
 - 菜单栏 App 只获得用户选择的 MAA `Data` 目录访问权。
 - Python watcher 只读镜像目录，不直接读 MAA 容器。
 - 自动启停是可选功能，默认关闭；启用后才会启动/退出 MAA。
-- 唯一外部网络请求是发送飞书消息。
+- 唯一外部网络请求是发送消息机器人 Webhook。
 
 ---
 

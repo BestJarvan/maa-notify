@@ -307,6 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsWindow: SettingsWindowController?
     private var settingsModel: SettingsModel?
     private var testProcess: Process?
+    private var syncProcess: Process?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ensureDirectory(kAppSupport)
@@ -548,6 +549,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         existing["maa"] = maa
 
+        if let notify = base["notify"] {
+            existing["notify"] = notify
+        }
         if let feishu = base["feishu"] {
             existing["feishu"] = feishu
         }
@@ -688,8 +692,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func webhookConfigured() -> Bool {
         let base = loadJSON(kBaseConfig) ?? [:]
+        let notify = base["notify"] as? [String: Any] ?? [:]
         let feishu = base["feishu"] as? [String: Any] ?? [:]
-        let value = (feishu["webhook"] as? String ?? "")
+        let value = ((notify["webhook"] as? String) ?? (feishu["webhook"] as? String) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return !value.isEmpty && !value.contains("REPLACE_ME")
     }
@@ -703,6 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func makeSettingsModel() -> SettingsModel {
         let base = loadJSON(kBaseConfig) ?? [:]
+        let notify = base["notify"] as? [String: Any] ?? [:]
         let feishu = base["feishu"] as? [String: Any] ?? [:]
         let policy = base["policy"] as? [String: Any] ?? [:]
         let menu = loadJSON(kMenuConfig) ?? [:]
@@ -713,16 +719,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             ?? ""
 
+        let provider = (notify["provider"] as? String) ?? "feishu"
+        let webhook = (notify["webhook"] as? String)
+            ?? (feishu["webhook"] as? String)
+            ?? ""
+        let secret = (notify["secret"] as? String)
+            ?? (feishu["secret"] as? String)
+            ?? ""
+        let keyword = (notify["keyword"] as? String)
+            ?? (feishu["keyword"] as? String)
+            ?? "MAA"
+
         return SettingsModel(
-            webhook: feishu["webhook"] as? String ?? "",
-            secret: feishu["secret"] as? String ?? "",
-            keyword: feishu["keyword"] as? String ?? "MAA",
+            provider: provider,
+            webhook: webhook,
+            secret: secret,
+            keyword: keyword,
             live: !((runtime["dry_run"] as? Bool) ?? true),
             autoStart: policy["auto_start_maa"] as? Bool ?? false,
             autoQuit: policy["auto_quit_maa"] as? Bool ?? false,
             leadMinutes: (policy["auto_start_lead_minutes"] as? NSNumber)?.intValue ?? 5,
             quitDelay: (policy["auto_quit_delay_seconds"] as? NSNumber)?.intValue ?? 60,
             icon: settings["icon"] as? String ?? iconName,
+            scheduleTimes: configuredScheduleList(),
             maaSchedule: readMaaScheduleText(),
             folderPath: folder,
             status: sourceURL == nil
@@ -734,6 +753,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refreshSettingsModel() {
         guard let model = settingsModel else { return }
         let fresh = makeSettingsModel()
+        model.provider = fresh.provider
         model.webhook = fresh.webhook
         model.secret = fresh.secret
         model.keyword = fresh.keyword
@@ -743,6 +763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.leadMinutes = fresh.leadMinutes
         model.quitDelay = fresh.quitDelay
         model.icon = fresh.icon
+        model.scheduleTimes = fresh.scheduleTimes
         model.maaSchedule = fresh.maaSchedule
         model.folderPath = fresh.folderPath
         model.status = fresh.status
@@ -766,6 +787,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self?.settingsModel?.status = "MAA 目录已更新。"
                     }
                 },
+                readMAA: { [weak self] in
+                    self?.settingsModel?.scheduleTimes = self?.readMaaScheduleList() ?? []
+                    self?.settingsModel?.status = "已从 MAA 读取定时。"
+                },
+                syncMAA: { [weak self] in self?.syncMAASchedule() },
                 refreshSchedule: { [weak self] in
                     self?.settingsModel?.maaSchedule = self?.readMaaScheduleText() ?? ""
                     self?.settingsModel?.status = "已刷新 MAA 定时。"
@@ -795,11 +821,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let canLive = !webhook.isEmpty && !webhook.contains("REPLACE_ME")
 
         var base = loadJSON(kBaseConfig) ?? [:]
+        var notify = base["notify"] as? [String: Any] ?? [:]
+        notify["provider"] = model.provider
+        notify["webhook"] = webhook
+        notify["secret"] = secret
+        notify["keyword"] = keyword
+        if notify["notify_on_success"] == nil { notify["notify_on_success"] = true }
+        if notify["notify_on_partial"] == nil { notify["notify_on_partial"] = true }
+        if notify["notify_on_missed"] == nil { notify["notify_on_missed"] = true }
+        base["notify"] = notify
+        
         var feishu = base["feishu"] as? [String: Any] ?? [:]
         feishu["webhook"] = webhook
         feishu["secret"] = secret
         feishu["keyword"] = keyword
         base["feishu"] = feishu
+
+        var maa = base["maa"] as? [String: Any] ?? [:]
+        let times = model.scheduleTimes
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if times.isEmpty {
+            maa.removeValue(forKey: "schedule_times")
+        } else {
+            maa["schedule_times"] = times
+        }
+        base["maa"] = maa
 
         var policy = base["policy"] as? [String: Any] ?? [:]
         policy["auto_start_maa"] = model.autoStart
@@ -874,6 +921,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func syncMAASchedule() {
+        guard let model = settingsModel else { return }
+        let times = model.scheduleTimes
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !times.isEmpty else {
+            model.status = "请至少添加一个定时。"
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "写入 MAA 定时任务？"
+        alert.informativeText = """
+        这会修改 MAA 的 MAAScheduledDailyTaskTimer。
+        如果 MAA 正在运行，会先退出 MAA，写入后重新启动。
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "写入并重启 MAA")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        saveSettings()
+        model.status = "正在写入 MAA 定时…"
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: kPython)
+        process.arguments = [
+            "-B", kRuntime.path,
+            "--config", kBaseConfig.path,
+            "sync-maa-schedule",
+            "--times", times.joined(separator: ","),
+        ]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        process.terminationHandler = { [weak self] proc in
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            DispatchQueue.main.async {
+                self?.syncProcess = nil
+                if proc.terminationStatus == 0 {
+                    self?.settingsModel?.maaSchedule = self?.readMaaScheduleText() ?? ""
+                    self?.settingsModel?.status = "MAA 定时已写入并重启。"
+                } else {
+                    self?.settingsModel?.status = "写入 MAA 定时失败：\(String(output.suffix(240)))"
+                }
+            }
+        }
+        syncProcess = process
+        do {
+            try process.run()
+        } catch {
+            syncProcess = nil
+            model.status = "写入 MAA 定时失败：\(error.localizedDescription)"
+        }
+    }
+
     private func startMAA() {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
@@ -898,7 +1003,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func readMaaScheduleText() -> String {
+    private func readMaaScheduleList() -> [String] {
         let prefs = kFeedDir.appendingPathComponent("prefs.plist")
         if let data = try? Data(contentsOf: prefs),
            let plist = try? PropertyListSerialization.propertyList(
@@ -924,15 +1029,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     slots.append(String(format: "%02d:%02d", hour, minute))
                 }
                 if !slots.isEmpty {
-                    return slots.sorted().joined(separator: " / ")
+                    return slots.sorted()
                 }
             }
         }
 
         let base = loadJSON(kBaseConfig) ?? [:]
         let maa = base["maa"] as? [String: Any] ?? [:]
-        let fallback = maa["fallback_times"] as? [String] ?? []
-        return fallback.joined(separator: " / ")
+        return maa["fallback_times"] as? [String] ?? []
+    }
+
+    private func readMaaScheduleText() -> String {
+        readMaaScheduleList().joined(separator: " / ")
+    }
+
+    private func configuredScheduleList() -> [String] {
+        let base = loadJSON(kBaseConfig) ?? [:]
+        let maa = base["maa"] as? [String: Any] ?? [:]
+        let configured = (maa["schedule_times"] as? [String] ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return configured.isEmpty ? readMaaScheduleList() : configured
     }
 
     // MARK: menu
@@ -969,7 +1086,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             addInfo(menu, "上次：暂无")
         }
 
-        let schedule = readMaaScheduleText()
+        let schedule = configuredScheduleList().joined(separator: " / ")
         if !schedule.isEmpty {
             addInfo(menu, "定时：\(schedule)")
         }

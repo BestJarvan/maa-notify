@@ -18,6 +18,7 @@ let kIconOptions: [IconOption] = [
 ]
 
 final class SettingsModel: ObservableObject {
+    @Published var provider: String
     @Published var webhook: String
     @Published var secret: String
     @Published var keyword: String
@@ -27,12 +28,14 @@ final class SettingsModel: ObservableObject {
     @Published var leadMinutes: Int
     @Published var quitDelay: Int
     @Published var icon: String
+    @Published var scheduleTimes: [String]
     @Published var maaSchedule: String
     @Published var folderPath: String
     @Published var status: String
     @Published var testing: Bool
 
     init(
+        provider: String,
         webhook: String,
         secret: String,
         keyword: String,
@@ -42,10 +45,12 @@ final class SettingsModel: ObservableObject {
         leadMinutes: Int,
         quitDelay: Int,
         icon: String,
+        scheduleTimes: [String],
         maaSchedule: String,
         folderPath: String,
         status: String
     ) {
+        self.provider = provider
         self.webhook = webhook
         self.secret = secret
         self.keyword = keyword
@@ -55,6 +60,7 @@ final class SettingsModel: ObservableObject {
         self.leadMinutes = leadMinutes
         self.quitDelay = quitDelay
         self.icon = icon
+        self.scheduleTimes = scheduleTimes
         self.maaSchedule = maaSchedule
         self.folderPath = folderPath
         self.status = status
@@ -75,6 +81,8 @@ struct SettingsActions {
     let save: () -> Void
     let test: () -> Void
     let chooseFolder: () -> Void
+    let readMAA: () -> Void
+    let syncMAA: () -> Void
     let refreshSchedule: () -> Void
     let startMAA: () -> Void
     let quitMAA: () -> Void
@@ -137,9 +145,9 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("三步开始监控").font(.headline)
             step(1, "选择 MAA 的 Data 目录", done: !model.folderPath.isEmpty)
-            step(2, "粘贴飞书机器人 Webhook", done: model.isWebhookConfigured)
+            step(2, "粘贴消息机器人 Webhook", done: model.isWebhookConfigured)
             step(3, "发送测试消息", done: false)
-            Text("不会给 Python 开“完全磁盘访问权限”，只读取你选择的 MAA 目录。")
+            Text("支持飞书 / 通用 Webhook / Bark / 钉钉 / 企业微信。不会给 Python 开“完全磁盘访问权限”。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -158,14 +166,22 @@ struct SettingsView: View {
     }
 
     private var feishuCard: some View {
-        card("飞书机器人") {
-            TextField("https://open.feishu.cn/open-apis/bot/v2/hook/...", text: $model.webhook)
+        card("消息机器人") {
+            Picker("机器人类型", selection: $model.provider) {
+                Text("飞书 / Lark").tag("feishu")
+                Text("通用 Webhook").tag("generic")
+                Text("Bark").tag("bark")
+                Text("钉钉").tag("dingtalk")
+                Text("企业微信").tag("wecom")
+            }
+            .pickerStyle(.menu)
+            TextField("Webhook 地址", text: $model.webhook)
                 .textFieldStyle(.roundedBorder)
-            SecureField("签名密钥（可选）", text: $model.secret)
+            SecureField("签名密钥（飞书/钉钉，可选）", text: $model.secret)
                 .textFieldStyle(.roundedBorder)
             TextField("自定义关键词（可选）", text: $model.keyword)
                 .textFieldStyle(.roundedBorder)
-            Toggle("启用飞书推送（关闭时只记录日志）", isOn: $model.live)
+            Toggle("启用消息推送（关闭时只记录日志）", isOn: $model.live)
             HStack {
                 Button(model.testing ? "发送中…" : "发送测试消息") { actions.test() }
                     .disabled(model.testing || !model.isWebhookConfigured)
@@ -179,14 +195,50 @@ struct SettingsView: View {
 
     private var scheduleCard: some View {
         card("定时与自动启停") {
+            Text("监控定时").font(.subheadline).fontWeight(.medium)
+            ForEach(Array(model.scheduleTimes.enumerated()), id: \.offset) { index, _ in
+                HStack(spacing: 8) {
+                    TextField("HH:mm", text: Binding(
+                        get: { model.scheduleTimes.indices.contains(index) ? model.scheduleTimes[index] : "" },
+                        set: { value in
+                            if model.scheduleTimes.indices.contains(index) {
+                                model.scheduleTimes[index] = value
+                            }
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 90)
+                    Button {
+                        if model.scheduleTimes.indices.contains(index) {
+                            model.scheduleTimes.remove(at: index)
+                        }
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.red)
+                    Spacer()
+                }
+            }
             HStack {
-                Text("MAA 定时")
+                Button("添加时间") {
+                    model.scheduleTimes.append("12:00")
+                }
+                Button("从 MAA 读取") { actions.readMAA() }
+                Spacer()
+                Button("写入 MAA 定时…") { actions.syncMAA() }
+                    .disabled(model.scheduleTimes.isEmpty)
+            }
+
+            HStack {
+                Text("MAA 当前定时")
                 Spacer()
                 Text(model.maaSchedule.isEmpty ? "未读取" : model.maaSchedule)
                     .foregroundStyle(.secondary)
                 Button("刷新") { actions.refreshSchedule() }
                     .buttonStyle(.link)
             }
+
             Toggle("定时前自动启动 MAA", isOn: $model.autoStart)
             Toggle("任务结束后自动退出 MAA", isOn: $model.autoQuit)
             Stepper(value: $model.leadMinutes, in: 1...30) {
@@ -195,7 +247,7 @@ struct SettingsView: View {
             Stepper(value: $model.quitDelay, in: 0...600, step: 10) {
                 Text("报告发送后 \(model.quitDelay) 秒退出")
             }
-            Text("自动启动/退出只在“启用飞书推送”后的 live 模式执行；dry-run 不操作 MAA。")
+            Text("“监控定时”决定软件何时检测/启动 MAA；改动后如需 MAA 自己也在新时间执行，请点“写入 MAA 定时…”。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

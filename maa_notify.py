@@ -28,7 +28,9 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime, timedelta
@@ -123,9 +125,21 @@ REASON_PATTERNS: List[Tuple[str, str]] = [
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "feishu": {
+        # 兼容旧配置；新配置请使用 notify。
         "webhook": "",
         "secret": "",
         "keyword": "MAA",
+        "notify_on_success": True,
+        "notify_on_partial": True,
+        "notify_on_missed": True,
+    },
+    "notify": {
+        "provider": "feishu",
+        "webhook": "",
+        "secret": "",
+        "keyword": "MAA",
+        "headers": {},
+        "body_template": "",
         "notify_on_success": True,
         "notify_on_partial": True,
         "notify_on_missed": True,
@@ -140,6 +154,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "schedule_domain": MAA_BUNDLE_ID,
         "schedule_key": "MAAScheduledDailyTaskTimer",
         "schedule_plist": "",
+        "schedule_times": [],
         "fallback_times": ["07:02", "19:01"],
     },
     "policy": {
@@ -197,6 +212,18 @@ def load_config(path: Path) -> Dict[str, Any]:
             "找不到配置文件 %s。请复制 config.example.json 为 config.json 并填写飞书 Webhook。" % path
         )
     raw = json.loads(path.read_text(encoding="utf-8"))
+    # 旧配置迁移：feishu -> notify，保留旧用户的开关和密钥。
+    if isinstance(raw, dict) and "notify" not in raw and isinstance(raw.get("feishu"), dict):
+        legacy = raw["feishu"]
+        raw["notify"] = {
+            "provider": "feishu",
+            "webhook": legacy.get("webhook", ""),
+            "secret": legacy.get("secret", ""),
+            "keyword": legacy.get("keyword", "MAA"),
+            "notify_on_success": legacy.get("notify_on_success", True),
+            "notify_on_partial": legacy.get("notify_on_partial", True),
+            "notify_on_missed": legacy.get("notify_on_missed", True),
+        }
     return deep_merge(DEFAULT_CONFIG, raw)
 
 
@@ -554,9 +581,29 @@ def _schedule_items_to_slots(items: Any) -> List[Tuple[int, int]]:
     return sorted(set(slots))
 
 
+def parse_schedule_times(values: Any) -> List[Tuple[int, int]]:
+    slots: List[Tuple[int, int]] = []
+    if not isinstance(values, list):
+        return slots
+    for value in values:
+        try:
+            hour, minute = str(value).strip().split(":", 1)
+            hour_i, minute_i = int(hour), int(minute)
+            if 0 <= hour_i <= 23 and 0 <= minute_i <= 59:
+                slots.append((hour_i, minute_i))
+        except (ValueError, TypeError):
+            continue
+    return sorted(set(slots))
+
+
 def read_schedule(cfg: Dict[str, Any]) -> List[Tuple[int, int]]:
     domain = cfg["maa"]["schedule_domain"]
     key = cfg["maa"]["schedule_key"]
+
+    # 优先使用软件自己的定时数组；为空时再读 MAA。
+    slots = parse_schedule_times(cfg["maa"].get("schedule_times") or [])
+    if slots:
+        return slots
 
     # 菜单栏 App 会把 MAA 的 Preferences plist 镜像到 feed，优先从那里读，
     # 避免 Python 子进程去碰受 TCC 保护的 MAA 容器。
@@ -609,6 +656,170 @@ def auto_start_due(
         if start_at <= now < slot:
             return slot, slot.strftime("%Y-%m-%dT%H:%M")
     return None
+
+
+def maa_process_running(cfg: Dict[str, Any]) -> Optional[bool]:
+    app_path = str(cfg["maa"].get("app_path") or MAA_APP_PATH)
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/pgrep", "-f", app_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return proc.returncode == 0
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def current_maa_schedule(cfg: Dict[str, Any]) -> Any:
+    domain = cfg["maa"]["schedule_domain"]
+    key = cfg["maa"]["schedule_key"]
+    try:
+        proc = subprocess.run(
+            ["/usr/bin/defaults", "read", domain, key],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        if proc.returncode != 0:
+            return None
+        return json.loads(proc.stdout.strip())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def write_maa_schedule(
+    cfg: Dict[str, Any], slots: List[Tuple[int, int]], restart: bool = True
+) -> List[Dict[str, Any]]:
+    """写入 MAA 的 MAAScheduledDailyTaskTimer。
+
+    会先备份当前值；如果 MAA 正在运行，先退出，写入后再启动。
+    这是控制 MAA 的操作，CLI/UI 必须让用户确认。
+    """
+    slots = sorted(set((int(h), int(m)) for h, m in slots))
+    if not slots:
+        raise ValueError("定时列表不能为空")
+
+    domain = cfg["maa"]["schedule_domain"]
+    key = cfg["maa"]["schedule_key"]
+    app_path = str(cfg["maa"].get("app_path") or MAA_APP_PATH)
+    old_value = None
+    try:
+        old_value = subprocess.check_output(
+            ["/usr/bin/defaults", "read", domain, key],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+        ).strip()
+    except Exception:  # noqa: BLE001
+        old_value = None
+
+    backup_path = APP_SUPPORT / "maa-schedule-backup.json"
+    write_json_atomic(
+        backup_path,
+        {
+            "domain": domain,
+            "key": key,
+            "value": old_value,
+            "backed_up_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    )
+
+    was_running = maa_process_running(cfg) is True
+    if was_running:
+        quit_proc = subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-e",
+                'tell application id "com.hguandl.MeoAsstMac" to quit',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if quit_proc.returncode != 0:
+            raise RuntimeError("无法退出 MAA，未修改定时：" + quit_proc.stderr[:160])
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if maa_process_running(cfg) is False:
+                break
+            time.sleep(0.5)
+        if maa_process_running(cfg) is not False:
+            raise RuntimeError("MAA 未在 10 秒内退出，未修改定时")
+
+    items = [
+        {
+            "hour": hour,
+            "minute": minute,
+            "isEnabled": True,
+            "id": str(uuid.uuid4()).upper(),
+        }
+        for hour, minute in slots
+    ]
+    json_text = json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+
+    try:
+        subprocess.run(
+            ["/usr/bin/defaults", "write", domain, key, "-string", json_text],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+        read_back = subprocess.check_output(
+            ["/usr/bin/defaults", "read", domain, key],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+        ).strip()
+        parsed = json.loads(read_back)
+        got = parse_schedule_times(
+            [
+                "%02d:%02d" % (int(item["hour"]), int(item["minute"]))
+                for item in parsed
+                if item.get("isEnabled", True)
+            ]
+        )
+        if got != slots:
+            raise RuntimeError("写入后校验失败：%s" % (got,))
+    except Exception:
+        # 尽量恢复旧值
+        if old_value:
+            try:
+                subprocess.run(
+                    ["/usr/bin/defaults", "write", domain, key, "-string", old_value],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        if was_running and restart:
+            try:
+                subprocess.run(
+                    ["/usr/bin/open", "-a", app_path],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=15,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        raise
+
+    if was_running and restart:
+        subprocess.run(
+            ["/usr/bin/open", "-a", app_path],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+
+    log.info("已写入 MAA 定时：%s", ", ".join("%02d:%02d" % item for item in slots))
+    return items
 
 
 # ---------------------------------------------------------------------------
@@ -1293,115 +1504,231 @@ def report_to_text(report: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 飞书
+# 通知（飞书 / 通用 Webhook / Bark / 钉钉 / 企业微信）
 # ---------------------------------------------------------------------------
 
 
-class FeishuError(RuntimeError):
+class NotifyError(RuntimeError):
     pass
 
 
-def feishu_configured(cfg: Dict[str, Any]) -> bool:
-    webhook = str(cfg["feishu"].get("webhook") or "").strip()
+# 兼容旧代码/旧调用方
+FeishuError = NotifyError
+
+
+def get_notify(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """把新 notify 配置和旧 feishu 配置归一化。"""
+    notify = cfg.get("notify") or {}
+    feishu = cfg.get("feishu") or {}
+    provider = str(notify.get("provider") or "feishu").strip().lower()
+    aliases = {
+        "lark": "feishu",
+        "飞书": "feishu",
+        "webhook": "generic",
+        "通用": "generic",
+        "bark": "bark",
+        "dingtalk": "dingtalk",
+        "钉钉": "dingtalk",
+        "wecom": "wecom",
+        "wechat": "wecom",
+        "企业微信": "wecom",
+    }
+    provider = aliases.get(provider, provider)
+
+    def pick(key: str, default: Any = "") -> Any:
+        value = notify.get(key)
+        if value not in (None, "", {}):
+            return value
+        return feishu.get(key, default)
+
+    toggle_source = notify if any(
+        key in notify
+        for key in ("notify_on_success", "notify_on_partial", "notify_on_missed")
+    ) else feishu
+
+    return {
+        "provider": provider,
+        "webhook": str(pick("webhook") or "").strip(),
+        "secret": str(pick("secret") or "").strip(),
+        "keyword": str(pick("keyword") or "MAA").strip(),
+        "headers": pick("headers", {}) if isinstance(pick("headers", {}), dict) else {},
+        "body_template": str(notify.get("body_template") or ""),
+        "notify_on_success": bool(toggle_source.get("notify_on_success", True)),
+        "notify_on_partial": bool(toggle_source.get("notify_on_partial", True)),
+        "notify_on_missed": bool(toggle_source.get("notify_on_missed", True)),
+    }
+
+
+def notify_configured(cfg: Dict[str, Any]) -> bool:
+    webhook = get_notify(cfg)["webhook"]
     return bool(webhook) and "REPLACE_ME" not in webhook
 
 
-def build_feishu_payload(report: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
-    icon, title_text, template = STATUS_META.get(
+# 兼容旧名字
+def feishu_configured(cfg: Dict[str, Any]) -> bool:
+    return notify_configured(cfg)
+
+
+def report_headline(report: Dict[str, Any]) -> str:
+    icon, title_text, _ = STATUS_META.get(
         report["status"], ("•", report["status"], "grey")
     )
     title = "%s MAA %s %s" % (icon, report["slot"], title_text)
     if report.get("late"):
         title += "（补跑）"
+    return title
 
-    keyword = str(cfg["feishu"].get("keyword") or "").strip()
 
-    if report["status"] == "missed":
-        body = report.get("missed_body") or "没有检测到 MAA 运行日志。"
-        content = "**时间**：%s\n**原因**：%s" % (report["slot"], body)
-    else:
-        lines = [
-            "**时间**：%s – %s（%s）"
-            % (
-                report["start_clock"],
-                report["end_clock"],
-                fmt_duration(report["duration_seconds"]),
-            ),
-            "**任务**：%d/%d 完成"
-            % (report["counts"]["completed"], report["counts"]["total"]),
-            "",
-        ]
-        for item in report["tasks"]:
-            if not item["expected"] and item["state"] != "error":
-                continue
-            line = "%s %s" % (task_icon(item), item["display"])
-            if item["state"] == "error":
-                line += "：%s" % (item["reason"] or "任务出错")
-            elif item["state"] == "pending":
-                line += "：未执行"
-            elif item["state"] == "running":
-                line += "：未完成"
-            elif item["duration_seconds"]:
-                line += "　%s" % fmt_duration(item["duration_seconds"])
-            lines.append(line)
+def build_text_report(report: Dict[str, Any]) -> str:
+    return report_to_text(report)
 
-        if report.get("failed_displays"):
-            lines.append("")
-            lines.append("**失败任务**：%s" % "、".join(report["failed_displays"]))
-        if report.get("not_run_displays"):
-            lines.append("**未执行**：%s" % "、".join(report["not_run_displays"]))
-        if report.get("retried_displays"):
-            lines.append("**重试后成功**：%s" % "、".join(report["retried_displays"]))
-        if report.get("start_failed_reason"):
-            lines.append("**原因**：%s" % report["start_failed_reason"])
-        if report.get("interrupted_reason"):
-            lines.append("**中断**：%s" % report["interrupted_reason"])
-        if report.get("timed_out"):
-            lines.append("**超时**：运行超过限制仍未结束")
-        if report.get("sanity"):
-            lines.append("**理智**：%s" % report["sanity"])
-        if report.get("failure_screenshot"):
-            lines.append("**失败截图**：%s" % report["failure_screenshot"])
-        content = "\n".join(lines)
 
-    if keyword and keyword not in content and keyword not in title:
-        content += "\n\n" + keyword
+def build_feishu_payload(report: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """构建当前 provider 的消息体（函数名保留以兼容旧调用）。"""
+    notify = get_notify(cfg)
+    provider = notify["provider"]
+    title = report_headline(report)
+    text = build_text_report(report)
 
-    note = "MAA 状态监控 · %s" % datetime.now().strftime("%Y-%m-%d %H:%M")
-    if report.get("log_path"):
-        note += " · " + report["log_path"]
+    if provider == "feishu":
+        icon, title_text, template = STATUS_META.get(
+            report["status"], ("•", report["status"], "grey")
+        )
+        keyword = str(notify["keyword"] or "").strip()
 
-    card = {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": template,
-            "title": {"tag": "plain_text", "content": title},
-        },
-        "elements": [
-            {"tag": "div", "text": {"tag": "lark_md", "content": content}},
-            {"tag": "hr"},
-            {
-                "tag": "note",
-                "elements": [{"tag": "plain_text", "content": note}],
+        if report["status"] == "missed":
+            missed = report.get("missed_body") or "没有检测到 MAA 运行日志。"
+            content = "**时间**：%s\n**原因**：%s" % (report["slot"], missed)
+        else:
+            lines = [
+                "**时间**：%s – %s（%s）"
+                % (
+                    report["start_clock"],
+                    report["end_clock"],
+                    fmt_duration(report["duration_seconds"]),
+                ),
+                "**任务**：%d/%d 完成"
+                % (report["counts"]["completed"], report["counts"]["total"]),
+                "",
+            ]
+            for item in report["tasks"]:
+                if not item["expected"] and item["state"] != "error":
+                    continue
+                line = "%s %s" % (task_icon(item), item["display"])
+                if item["state"] == "error":
+                    line += "：%s" % (item["reason"] or "任务出错")
+                elif item["state"] == "pending":
+                    line += "：未执行"
+                elif item["state"] == "running":
+                    line += "：未完成"
+                elif item["duration_seconds"]:
+                    line += "　%s" % fmt_duration(item["duration_seconds"])
+                lines.append(line)
+
+            if report.get("failed_displays"):
+                lines.append("")
+                lines.append("**失败任务**：%s" % "、".join(report["failed_displays"]))
+            if report.get("not_run_displays"):
+                lines.append("**未执行**：%s" % "、".join(report["not_run_displays"]))
+            if report.get("retried_displays"):
+                lines.append("**重试后成功**：%s" % "、".join(report["retried_displays"]))
+            if report.get("start_failed_reason"):
+                lines.append("**原因**：%s" % report["start_failed_reason"])
+            if report.get("interrupted_reason"):
+                lines.append("**中断**：%s" % report["interrupted_reason"])
+            if report.get("timed_out"):
+                lines.append("**超时**：运行超过限制仍未结束")
+            if report.get("sanity"):
+                lines.append("**理智**：%s" % report["sanity"])
+            if report.get("failure_screenshot"):
+                lines.append("**失败截图**：%s" % report["failure_screenshot"])
+            content = "\n".join(lines)
+
+        if keyword and keyword not in content and keyword not in title:
+            content += "\n\n" + keyword
+
+        note = "MAA 状态监控 · %s" % datetime.now().strftime("%Y-%m-%d %H:%M")
+        if report.get("log_path"):
+            note += " · " + report["log_path"]
+
+        return {
+            "msg_type": "interactive",
+            "card": {
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "template": template,
+                    "title": {"tag": "plain_text", "content": title},
+                },
+                "elements": [
+                    {"tag": "div", "text": {"tag": "lark_md", "content": content}},
+                    {"tag": "hr"},
+                    {
+                        "tag": "note",
+                        "elements": [{"tag": "plain_text", "content": note}],
+                    },
+                ],
             },
-        ],
+        }
+
+    if provider == "bark":
+        return {"title": title, "body": text, "group": "MAA"}
+
+    if provider == "dingtalk":
+        return {
+            "msgtype": "markdown",
+            "markdown": {"title": title, "text": text},
+        }
+
+    if provider == "wecom":
+        return {"msgtype": "markdown", "markdown": {"content": text}}
+
+    # generic：默认 JSON，可用 body_template 自定义
+    template = str(notify.get("body_template") or "").strip()
+    if template:
+        rendered = (
+            template.replace("{{title}}", json.dumps(title, ensure_ascii=False)[1:-1])
+            .replace("{{content}}", json.dumps(text, ensure_ascii=False)[1:-1])
+            .replace("{{status}}", report["status"])
+            .replace("{{slot}}", report["slot"])
+            .replace("{{report_json}}", json.dumps(report, ensure_ascii=False))
+        )
+        try:
+            parsed = json.loads(rendered)
+            if isinstance(parsed, dict):
+                return parsed
+        except ValueError:
+            log.warning("notify.body_template 不是合法 JSON，回退到默认 JSON")
+
+    return {
+        "title": title,
+        "content": text,
+        "status": report["status"],
+        "slot": report["slot"],
+        "date": report["date"],
+        "report": report,
     }
-    return {"msg_type": "interactive", "card": card}
 
 
-def send_feishu(payload: Dict[str, Any], cfg: Dict[str, Any], dry_run: bool = False) -> bool:
-    webhook = str(cfg["feishu"].get("webhook") or "").strip()
+def send_notification(
+    payload: Dict[str, Any], cfg: Dict[str, Any], dry_run: bool = False
+) -> bool:
+    notify = get_notify(cfg)
+    provider = notify["provider"]
+    webhook = notify["webhook"]
     if dry_run:
-        log.info("dry-run 飞书 payload：%s", json.dumps(payload, ensure_ascii=False))
+        log.info("dry-run 消息 payload：%s", json.dumps(payload, ensure_ascii=False))
         return True
     if not webhook or "REPLACE_ME" in webhook:
-        raise FeishuError("尚未配置飞书 Webhook，请编辑 config.json 的 feishu.webhook")
+        raise NotifyError("尚未配置消息机器人 Webhook，请编辑 config.json 的 notify.webhook")
     if not webhook.startswith("https://") and not webhook.startswith("http://"):
-        raise FeishuError("飞书 Webhook 格式不正确")
+        raise NotifyError("Webhook 格式不正确")
 
     body = copy.deepcopy(payload)
-    secret = str(cfg["feishu"].get("secret") or "").strip()
-    if secret:
+    secret = notify["secret"]
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    headers.update(notify["headers"])
+
+    if provider == "feishu" and secret:
         timestamp = str(int(time.time()))
         string_to_sign = "%s\n%s" % (timestamp, secret)
         digest = hmac.new(
@@ -1410,36 +1737,62 @@ def send_feishu(payload: Dict[str, Any], cfg: Dict[str, Any], dry_run: bool = Fa
         body["timestamp"] = timestamp
         body["sign"] = base64.b64encode(digest).decode("utf-8")
 
+    if provider == "dingtalk" and secret:
+        timestamp = str(int(time.time() * 1000))
+        string_to_sign = "%s\n%s" % (timestamp, secret)
+        digest = hmac.new(
+            secret.encode("utf-8"),
+            string_to_sign.encode("utf-8"),
+            digestmod=hashlib.sha256,
+        ).digest()
+        sign = urllib.parse.quote_plus(base64.b64encode(digest).decode("utf-8"))
+        webhook += ("&" if "?" in webhook else "?") + "timestamp=%s&sign=%s" % (
+            timestamp,
+            sign,
+        )
+
     data = json.dumps(body, ensure_ascii=False).encode("utf-8")
     last_error: Optional[Exception] = None
     for attempt in range(1, 4):
         try:
             request = urllib.request.Request(
-                webhook,
-                data=data,
-                headers={"Content-Type": "application/json; charset=utf-8"},
-                method="POST",
+                webhook, data=data, headers=headers, method="POST"
             )
             with urllib.request.urlopen(request, timeout=10) as response:
                 raw = response.read().decode("utf-8", errors="replace")
-            result = json.loads(raw)
-            code = result.get("code", result.get("StatusCode", 0))
+            try:
+                result = json.loads(raw) if raw.strip() else {}
+            except ValueError:
+                result = {}
+            code = result.get(
+                "code", result.get("errcode", result.get("StatusCode", 0))
+            )
             try:
                 code = int(code) if code is not None else 0
             except (TypeError, ValueError):
                 pass
-            if code not in (0, None):
-                raise FeishuError(
-                    "飞书返回错误 code=%s msg=%s" % (code, result.get("msg", raw[:200]))
+            if code not in (0, 200, None):
+                raise NotifyError(
+                    "%s 返回错误 code=%s msg=%s"
+                    % (
+                        provider,
+                        code,
+                        result.get("msg", result.get("errmsg", raw[:200])),
+                    )
                 )
-            log.info("飞书推送成功")
+            log.info("消息推送成功（%s）", provider)
             return True
         except Exception as exc:  # noqa: BLE001
             last_error = exc
-            log.warning("飞书推送失败（第 %d/3 次）：%s", attempt, exc)
+            log.warning("消息推送失败（第 %d/3 次）：%s", attempt, exc)
             if attempt < 3:
                 time.sleep(2 if attempt == 1 else 5)
-    raise FeishuError("飞书推送失败：%s" % last_error)
+    raise NotifyError("消息推送失败：%s" % last_error)
+
+
+# 兼容旧函数名
+def send_feishu(payload: Dict[str, Any], cfg: Dict[str, Any], dry_run: bool = False) -> bool:
+    return send_notification(payload, cfg, dry_run=dry_run)
 
 
 # ---------------------------------------------------------------------------
@@ -1629,7 +1982,7 @@ class Watcher:
             self.dry_run,
             bool(self.cfg["policy"].get("auto_start_maa", False)),
             bool(self.cfg["policy"].get("auto_quit_maa", False)),
-            "" if self.feishu_ready else "（未配置飞书 Webhook，仅写日志）",
+            "" if self.feishu_ready else "（未配置消息机器人 Webhook，仅写日志）",
         )
         while not self._stop:
             try:
@@ -1996,12 +2349,13 @@ class Watcher:
         save_state(STATE_PATH, self.state, None, self.tail)
 
     def _should_notify(self, report: Dict[str, Any]) -> bool:
+        notify = get_notify(self.cfg)
         if report["status"] == "success":
-            return bool(self.cfg["feishu"].get("notify_on_success", True))
+            return bool(notify.get("notify_on_success", True))
         if report["status"] == "partial":
-            return bool(self.cfg["feishu"].get("notify_on_partial", True))
+            return bool(notify.get("notify_on_partial", True))
         if report["status"] == "missed":
-            return bool(self.cfg["feishu"].get("notify_on_missed", True))
+            return bool(notify.get("notify_on_missed", True))
         return True
 
     def _enqueue_pending(self, key: str, payload: Dict[str, Any]) -> None:
@@ -2235,7 +2589,7 @@ def cmd_test(args: argparse.Namespace, cfg: Dict[str, Any]) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     send_feishu(payload, cfg)
-    print("测试卡片已发送。")
+    print("测试消息已发送。")
     return 0
 
 
@@ -2447,12 +2801,56 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--json", action="store_true")
     report.add_argument("--send", action="store_true")
 
+    sub.add_parser("schedule", parents=[common], help="输出当前生效的定时（JSON）")
+
+    sync_schedule = sub.add_parser(
+        "sync-maa-schedule",
+        parents=[common],
+        help="把定时数组写入 MAA（会退出/重启 MAA）",
+    )
+    sync_schedule.add_argument(
+        "--times",
+        required=True,
+        help='逗号分隔的定时，例如 "07:02,19:01"',
+    )
+    sync_schedule.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="写入后不重新启动 MAA",
+    )
+
     sub.add_parser("test", parents=[common], help="发送一张测试卡片")
 
     doctor = sub.add_parser("doctor", parents=[common], help="检查日志权限和配置")
     doctor.add_argument("--open", dest="open_settings", action="store_true", help="打开完全磁盘访问设置")
     doctor.add_argument("--launchd", action="store_true", help="在 launchd 上下文中实测一次权限")
     return parser
+
+
+def cmd_schedule(args: argparse.Namespace, cfg: Dict[str, Any]) -> int:
+    slots = read_schedule(cfg)
+    print(json.dumps(["%02d:%02d" % item for item in slots], ensure_ascii=False))
+    return 0
+
+
+def cmd_sync_maa_schedule(args: argparse.Namespace, cfg: Dict[str, Any]) -> int:
+    values = [item.strip() for item in str(args.times).split(",") if item.strip()]
+    slots = parse_schedule_times(values)
+    if not slots:
+        print("定时格式不正确，应为 HH:MM,HH:MM", file=sys.stderr)
+        return 2
+    try:
+        items = write_maa_schedule(cfg, slots, restart=not args.no_restart)
+    except Exception as exc:  # noqa: BLE001
+        print("写入 MAA 定时失败：%s" % exc, file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            ["%02d:%02d" % (item["hour"], item["minute"]) for item in items],
+            ensure_ascii=False,
+        )
+    )
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -2485,12 +2883,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             return cmd_status(args, cfg)
         if args.command in ("replay", "report"):
             return cmd_replay(args, cfg)
+        if args.command == "schedule":
+            return cmd_schedule(args, cfg)
+        if args.command == "sync-maa-schedule":
+            return cmd_sync_maa_schedule(args, cfg)
         if args.command == "test":
             return cmd_test(args, cfg)
         if args.command == "doctor":
             return cmd_doctor(args, cfg)
     except FeishuError as exc:
-        print("飞书发送失败：%s" % exc, file=sys.stderr)
+        print("消息发送失败：%s" % exc, file=sys.stderr)
         return 1
     parser.print_help()
     return 2

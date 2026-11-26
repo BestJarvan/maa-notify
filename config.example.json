@@ -1,8 +1,11 @@
 {
-  "feishu": {
+  "notify": {
+    "provider": "feishu",
     "webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME",
     "secret": "",
     "keyword": "MAA",
+    "headers": {},
+    "body_template": "",
     "notify_on_success": true,
     "notify_on_partial": true,
     "notify_on_missed": true
@@ -17,6 +20,7 @@
     "schedule_domain": "com.hguandl.MeoAsstMac",
     "schedule_key": "MAAScheduledDailyTaskTimer",
     "schedule_plist": "",
+    "schedule_times": [],
     "fallback_times": ["07:02", "19:01"]
   },
   "policy": {

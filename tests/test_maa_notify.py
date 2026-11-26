@@ -294,6 +294,19 @@ class TestAutoControlBehavior(unittest.TestCase):
         self.assertIsNone(watcher.pending_quit_at)
 
 
+class TestConfiguredSchedule(unittest.TestCase):
+    def test_config_schedule_times_wins(self):
+        cfg = mn.load_config(ROOT / "config.example.json")
+        cfg["maa"]["schedule_times"] = ["08:30", "20:15"]
+        self.assertEqual(mn.read_schedule(cfg), [(8, 30), (20, 15)])
+
+    def test_parse_schedule_times(self):
+        self.assertEqual(
+            mn.parse_schedule_times(["07:02", "19:01", "bad", "25:00", "07:02"]),
+            [(7, 2), (19, 1)],
+        )
+
+
 class TestSchedulePlist(unittest.TestCase):
     def test_read_schedule_from_prefs_plist(self):
         cfg = mn.load_config(ROOT / "config.example.json")
@@ -311,6 +324,64 @@ class TestSchedulePlist(unittest.TestCase):
             )
             cfg["maa"]["schedule_plist"] = str(path)
             self.assertEqual(mn.read_schedule(cfg), [(7, 2), (19, 1)])
+
+
+class TestLegacyNotifyConfig(unittest.TestCase):
+    def test_feishu_config_migrates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(json.dumps({
+                "feishu": {
+                    "webhook": "https://example.invalid/hook",
+                    "secret": "s",
+                    "keyword": "MAA",
+                    "notify_on_success": False,
+                }
+            }))
+            cfg = mn.load_config(path)
+            notify = mn.get_notify(cfg)
+            self.assertEqual(notify["provider"], "feishu")
+            self.assertEqual(notify["webhook"], "https://example.invalid/hook")
+            self.assertFalse(notify["notify_on_success"])
+
+
+class TestNotificationProviders(unittest.TestCase):
+    def report(self):
+        run = mn.Run.create(
+            "2026-11-23T07:02", dt("2026-11-23 07:02"), expected_fight_twice()
+        )
+        for task in run.tasks:
+            task.begin(dt("2026-11-23 07:02"))
+            task.complete(dt("2026-11-23 07:03"))
+        run.end_time = dt("2026-11-23 07:40")
+        run.status = "success"
+        return mn.build_report(run, mn.deep_merge(mn.DEFAULT_CONFIG, {}))
+
+    def test_generic_payload(self):
+        cfg = mn.deep_merge(
+            mn.DEFAULT_CONFIG,
+            {"notify": {"provider": "generic", "webhook": "https://example.invalid/hook"}},
+        )
+        payload = mn.build_feishu_payload(self.report(), cfg)
+        self.assertEqual(payload["status"], "success")
+        self.assertIn("report", payload)
+        self.assertIn("MAA", payload["title"])
+
+    def test_bark_payload(self):
+        cfg = mn.deep_merge(
+            mn.DEFAULT_CONFIG,
+            {"notify": {"provider": "bark", "webhook": "https://example.invalid/key"}},
+        )
+        payload = mn.build_feishu_payload(self.report(), cfg)
+        self.assertEqual(payload["group"], "MAA")
+        self.assertIn("body", payload)
+
+    def test_provider_alias(self):
+        cfg = mn.deep_merge(
+            mn.DEFAULT_CONFIG,
+            {"notify": {"provider": "企业微信", "webhook": "https://example.invalid/hook"}},
+        )
+        self.assertEqual(mn.get_notify(cfg)["provider"], "wecom")
 
 
 class TestRealLogs(unittest.TestCase):
