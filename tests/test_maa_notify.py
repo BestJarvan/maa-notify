@@ -74,7 +74,7 @@ class TestRunStartSignal(unittest.TestCase):
             mn.is_run_start_message("外部资源版本：雪山降临1101 更新时间：2026-11-24")
         )
         self.assertFalse(mn.is_run_start_message("资源已是最新版本"))
-        self.assertTrue(mn.is_run_start_message("正在连接……"))
+        self.assertFalse(mn.is_run_start_message("正在连接……"))
         self.assertTrue(mn.is_run_start_message("开始任务：开始唤醒"))
         self.assertTrue(mn.is_run_start_message("StartTasksFailed: connectFailed"))
         self.assertTrue(mn.is_run_start_message("任务已全部完成！") is False)

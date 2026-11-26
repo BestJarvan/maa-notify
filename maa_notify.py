@@ -641,11 +641,9 @@ def event_label(message: str, prefix: str) -> str:
 
 
 def is_run_start_message(message: str) -> bool:
-    """真正的运行开始信号；资源更新/版本检查之类不能开启一场运行。"""
+    """真正的运行开始信号；资源更新/连接准备都不能开启一场运行。"""
     return (
-        message.startswith("正在连接")
-        or message.startswith("正在运行中")
-        or message.startswith("开始任务：")
+        message.startswith("开始任务：")
         or "StartTasksFailed:" in message
         or "连接失败" in message
         or "不支持此版本PlayCover" in message

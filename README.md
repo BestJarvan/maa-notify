@@ -280,6 +280,10 @@ cd /path/to/maa-notify
 git init
 git add .
 git commit -m "Initial MAA status monitor"
+
+# 配置远端后上传
+git remote add origin <your-repo-url>
+git push -u origin main
 ```
 
 首次运行前复制配置并填入 Webhook：
