@@ -4,6 +4,6 @@ on:
     branches: [feat/release-automation]
 jobs:
   hello:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - run: sw_vers && swiftc --version
