@@ -1,4 +1,4 @@
-name: PR Review
+name: PR 审核
 
 on:
   pull_request:
@@ -16,25 +16,31 @@ concurrency:
 
 jobs:
   verify:
+    name: 检查与构建
     if: github.event.pull_request.draft == false
     runs-on: macos-latest
     steps:
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: 配置 Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Run tests
+      - name: 运行 Python 测试
         run: |
+          echo "开始运行 Python 测试……"
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+          echo "Python 测试通过。"
 
-      - name: Build zip and dmg
-        run: ./menuapp/package.sh
+      - name: 构建 zip 和 dmg
+        run: |
+          echo "开始构建 zip 和 dmg……"
+          ./menuapp/package.sh
+          echo "zip 和 dmg 构建完成。"
 
-      - name: Verify artifacts
+      - name: 校验构建产物
         run: |
           VERSION="$(cat VERSION)"
           test -f "dist/MaaNotify-$VERSION.zip"
@@ -42,9 +48,9 @@ jobs:
           test -f "dist/MaaNotify-$VERSION.zip.sha256"
           test -f "dist/MaaNotify-$VERSION.dmg.sha256"
           hdiutil verify "dist/MaaNotify-$VERSION.dmg"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "构建产物校验通过，版本：$VERSION"
 
-      - name: Upload PR artifacts
+      - name: 上传 PR 构建产物
         uses: actions/upload-artifact@v4
         with:
           name: MaaNotify-pr-${{ github.event.pull_request.number }}
@@ -55,6 +61,7 @@ jobs:
           if-no-files-found: error
 
   approve:
+    name: 自动审批
     needs: verify
     if: >-
       success() &&
@@ -65,22 +72,23 @@ jobs:
       GH_REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
-      - name: Create labels
+      - name: 创建标签
         run: |
-          gh label create "auto-reviewed" --color 0E8A16 \
+          gh label create "自动审核通过" --color 0E8A16 \
             --description "自动检查通过并由机器人审批" --force
-          gh label create "needs-fix" --color D93F0B \
+          gh label create "需要修复" --color D93F0B \
             --description "自动检查未通过" --force
 
-      - name: Approve pull request
+      - name: 审批 PR 并打标签
         run: |
           gh pr review "$PR_NUMBER" --approve --body \
             "自动检查通过：Python 测试、Swift 构建、zip 与 dmg 打包、dmg 校验均成功。"
-          gh pr edit "$PR_NUMBER" --add-label "auto-reviewed" --remove-label "needs-fix" || true
+          gh pr edit "$PR_NUMBER" --add-label "自动审核通过" --remove-label "需要修复" || true
           gh pr comment "$PR_NUMBER" --body \
             "✅ 自动审核通过，已由机器人审批。合并后会自动构建并发布 GitHub Release。"
 
   needs-fix:
+    name: 标记未通过
     needs: verify
     if: >-
       failure() &&
@@ -91,13 +99,13 @@ jobs:
       GH_REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
-      - name: Create labels
+      - name: 创建标签
         run: |
-          gh label create "needs-fix" --color D93F0B \
+          gh label create "需要修复" --color D93F0B \
             --description "自动检查未通过" --force || true
 
-      - name: Mark pull request
+      - name: 标记 PR
         run: |
-          gh pr edit "$PR_NUMBER" --add-label "needs-fix" || true
+          gh pr edit "$PR_NUMBER" --add-label "需要修复" || true
           gh pr comment "$PR_NUMBER" --body \
             "❌ 自动检查未通过。请查看本次 Actions 日志，修复后重新推送即可再次触发审核。"

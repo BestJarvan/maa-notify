@@ -34,12 +34,12 @@ macOS 上的 **MAA（MaaAssistantArknights）运行状态监控**。
 
 ### 方式 A：发行包
 
-**DMG（推荐）**：下载 `MaaNotify-1.1.0.dmg`，双击挂载后运行 `安装.command`。
+**DMG（推荐）**：下载 `MaaNotify-1.0.0.dmg`，双击挂载后运行 `安装.command`。
 
-**ZIP**：下载并解压 `MaaNotify-1.1.0.zip` 后：
+**ZIP**：下载并解压 `MaaNotify-1.0.0.zip` 后：
 
 ```bash
-cd MaaNotify-1.1.0
+cd MaaNotify-1.0.0
 ./install_menuapp.sh
 ```
 
@@ -263,6 +263,7 @@ maa-notify/
 ├── uninstall_menuapp.sh
 ├── install.sh                # 旧命令行/LaunchAgent 方式
 ├── uninstall.sh
+├── CONTRIBUTING.md           # 提交与中文规范
 ├── .github/workflows/
 │   ├── pr-review.yml         # PR 测试 + 自动审批 + 标签
 │   └── release.yml           # main 构建 + GitHub Release
@@ -327,10 +328,10 @@ cd ..
 产物：
 
 ```text
-dist/MaaNotify-1.1.0.zip
-dist/MaaNotify-1.1.0.zip.sha256
-dist/MaaNotify-1.1.0.dmg
-dist/MaaNotify-1.1.0.dmg.sha256
+dist/MaaNotify-1.0.0.zip
+dist/MaaNotify-1.0.0.zip.sha256
+dist/MaaNotify-1.0.0.dmg
+dist/MaaNotify-1.0.0.dmg.sha256
 ```
 
 两种包内容一致：
@@ -407,7 +408,7 @@ PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -m unittest discover -s tests -v
 
 ```bash
 cat VERSION
-# 1.1.0
+# 1.0.0
 ```
 
 PR 合并到 `main` 后，GitHub Actions 会：
@@ -427,10 +428,17 @@ PR 合并到 `main` 后，GitHub Actions 会：
 2. 编译 Swift 菜单栏 App；
 3. 同时构建 zip 和 dmg；
 4. 校验 dmg；
-5. 通过后机器人自动审批，并打上 `auto-reviewed` 标签；
-6. 失败则打上 `needs-fix` 标签并留言。
+5. 通过后机器人自动审批，并打上 `自动审核通过` 标签；
+6. 失败则打上 `需要修复` 标签并留言。
 
 PR 合并到 `main` 后，`.github/workflows/release.yml` 会重新构建，并自动创建 GitHub Release，上传 zip、dmg 和校验文件。若 `v$(cat VERSION)` 已发布，则跳过，避免重复。
+
+## 10. 中文规范
+
+- Git 提交信息统一使用简体中文；
+- PR 标题、PR 描述、CI 步骤名、脚本输出和用户提示以简体中文为主；
+- 第三方工具自身输出的英文（例如 Swift 编译器、unittest）保持原样，不强行翻译；
+- 当前线上版本基线为 `1.0.0`，后续功能迭代再升级版本号。
 
 ## TODO
 

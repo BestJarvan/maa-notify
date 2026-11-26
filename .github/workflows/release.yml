@@ -1,4 +1,4 @@
-name: Release
+name: 发布
 
 on:
   push:
@@ -14,19 +14,20 @@ concurrency:
 
 jobs:
   check:
+    name: 检查版本
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       exists: ${{ steps.release.outputs.exists }}
     steps:
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: Read version
+      - name: 读取版本号
         id: version
         run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
-      - name: Check existing release
+      - name: 检查是否已发布
         id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -34,43 +35,52 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           if gh release view "v$VERSION" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release v$VERSION already exists; skipping build."
+            echo "版本 v$VERSION 已发布，跳过构建。"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "版本 v$VERSION 尚未发布，准备构建。"
           fi
 
   release:
+    name: 构建并发布
     needs: check
     if: needs.check.outputs.exists == 'false'
     runs-on: macos-latest
     env:
       VERSION: ${{ needs.check.outputs.version }}
     steps:
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Python
+      - name: 配置 Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Run tests
-        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+      - name: 运行 Python 测试
+        run: |
+          echo "开始运行 Python 测试……"
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+          echo "Python 测试通过。"
 
-      - name: Build zip and dmg
-        run: ./menuapp/package.sh
+      - name: 构建 zip 和 dmg
+        run: |
+          echo "开始构建 zip 和 dmg……"
+          ./menuapp/package.sh
+          echo "zip 和 dmg 构建完成。"
 
-      - name: Verify artifacts
+      - name: 校验构建产物
         run: |
           test -f "dist/MaaNotify-$VERSION.zip"
           test -f "dist/MaaNotify-$VERSION.dmg"
           test -f "dist/MaaNotify-$VERSION.zip.sha256"
           test -f "dist/MaaNotify-$VERSION.dmg.sha256"
           hdiutil verify "dist/MaaNotify-$VERSION.dmg"
+          echo "构建产物校验通过，版本：$VERSION"
 
-      - name: Create GitHub Release
+      - name: 创建 GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
