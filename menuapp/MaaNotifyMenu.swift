@@ -465,6 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             saveBookmark(dataURL)
             startMonitoring()
             after?()
+            maybeShowOnboarding()
         }
     }
 
