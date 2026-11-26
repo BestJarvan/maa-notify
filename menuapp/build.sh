@@ -14,7 +14,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 echo "编译 Swift…"
 swiftc -O -swift-version 5 -framework Cocoa -framework SwiftUI \
   -o "$APP/Contents/MacOS/MaaNotify" \
-  "$SRC/MaaNotifyMenu.swift" "$SRC/SettingsView.swift"
+  "$SRC/MaaNotifyMenu.swift" "$SRC/SettingsView.swift" "$SRC/MenuPanelView.swift"
 
 cp "$SRC/Info.plist" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
