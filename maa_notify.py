@@ -1868,11 +1868,7 @@ class Watcher:
         self.cfg = cfg
         self.config_path = config_path
         self.feishu_ready = feishu_configured(cfg)
-        self.dry_run = (
-            dry_run
-            or bool(cfg.get("runtime", {}).get("dry_run"))
-            or not self.feishu_ready
-        )
+        self.dry_run = dry_run or bool(cfg.get("runtime", {}).get("dry_run"))
         self.expected = load_expected_tasks(cfg)
         self.schedule = read_schedule(cfg)
         self.state = load_state(STATE_PATH, datetime.now())
@@ -2365,6 +2361,9 @@ class Watcher:
         save_state(STATE_PATH, self.state, None, self.tail)
 
     def _should_notify(self, report: Dict[str, Any]) -> bool:
+        if not self.feishu_ready:
+            log.info("未配置消息机器人，跳过推送；结果仍会写入菜单和历史")
+            return False
         notify = get_notify(self.cfg)
         if report["status"] == "success":
             return bool(notify.get("notify_on_success", True))

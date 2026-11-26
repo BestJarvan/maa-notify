@@ -28,6 +28,7 @@ final class SettingsModel: ObservableObject {
     @Published var leadMinutes: Int
     @Published var quitDelay: Int
     @Published var icon: String
+    @Published var launchAtLogin: Bool
     @Published var scheduleTimes: [String]
     @Published var maaSchedule: String
     @Published var folderPath: String
@@ -45,6 +46,7 @@ final class SettingsModel: ObservableObject {
         leadMinutes: Int,
         quitDelay: Int,
         icon: String,
+        launchAtLogin: Bool,
         scheduleTimes: [String],
         maaSchedule: String,
         folderPath: String,
@@ -60,6 +62,7 @@ final class SettingsModel: ObservableObject {
         self.leadMinutes = leadMinutes
         self.quitDelay = quitDelay
         self.icon = icon
+        self.launchAtLogin = launchAtLogin
         self.scheduleTimes = scheduleTimes
         self.maaSchedule = maaSchedule
         self.folderPath = folderPath
@@ -73,7 +76,7 @@ final class SettingsModel: ObservableObject {
     }
 
     var needsSetup: Bool {
-        !isWebhookConfigured || folderPath.isEmpty
+        folderPath.isEmpty
     }
 }
 
@@ -81,6 +84,7 @@ struct SettingsActions {
     let save: () -> Void
     let test: () -> Void
     let chooseFolder: () -> Void
+    let useDefaultFolder: () -> Void
     let readMAA: () -> Void
     let syncMAA: () -> Void
     let refreshSchedule: () -> Void
@@ -93,7 +97,6 @@ struct SettingsActions {
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     let actions: SettingsActions
-    @State private var revealWebhook = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,6 +106,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if model.needsSetup {
                         onboarding
+                    } else if !model.isWebhookConfigured {
+                        optionalNotificationBanner
                     }
                     feishuCard
                     scheduleCard
@@ -123,7 +128,7 @@ struct SettingsView: View {
             Divider()
             footer
         }
-        .frame(width: 600, height: 720)
+        .frame(width: 600, height: 760)
     }
 
     private var header: some View {
@@ -144,17 +149,35 @@ struct SettingsView: View {
 
     private var onboarding: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("三步开始监控").font(.headline)
+            Text("开始监控").font(.headline)
             step(1, "选择 MAA 的 Data 目录", done: !model.folderPath.isEmpty)
-            step(2, "粘贴消息机器人 Webhook", done: model.isWebhookConfigured)
-            step(3, "发送测试消息", done: false)
-            Text("支持飞书 / 通用 Webhook / Bark / 钉钉 / 企业微信。不会给 Python 开“完全磁盘访问权限”。")
+            step(2, "消息机器人（可选）", done: model.isWebhookConfigured)
+            step(3, "需要推送时再发送测试消息", done: false)
+            Text("不填机器人也能正常监控、记录历史和更新菜单，只是收不到推送。支持飞书 / 通用 Webhook / Bark / 钉钉 / 企业微信。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.accentColor.opacity(0.08))
+        .cornerRadius(10)
+    }
+
+    private var optionalNotificationBanner: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "bell.slash")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("未配置消息机器人")
+                    .font(.callout).fontWeight(.medium)
+                Text("监控、菜单状态和历史记录仍然可用；只跳过消息推送。需要时在下方填写 Webhook 即可。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.08))
         .cornerRadius(10)
     }
 
@@ -168,6 +191,9 @@ struct SettingsView: View {
 
     private var feishuCard: some View {
         card("消息机器人") {
+            Text("机器人可选：不填写也能监控，只是不会发送通知。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Picker("机器人类型", selection: $model.provider) {
                 Text("飞书 / Lark").tag("feishu")
                 Text("通用 Webhook").tag("generic")
@@ -176,27 +202,21 @@ struct SettingsView: View {
                 Text("企业微信").tag("wecom")
             }
             .pickerStyle(.menu)
-            HStack(spacing: 6) {
-                if revealWebhook {
-                    TextField("Webhook 地址", text: $model.webhook)
-                        .textFieldStyle(.roundedBorder)
-                } else {
-                    SecureField("Webhook 地址", text: $model.webhook)
-                        .textFieldStyle(.roundedBorder)
-                }
-                Button {
-                    revealWebhook.toggle()
-                } label: {
-                    Image(systemName: revealWebhook ? "eye.slash" : "eye")
-                }
-                .buttonStyle(.borderless)
-                .help(revealWebhook ? "隐藏 Webhook" : "显示 Webhook")
-            }
-            SecureField("签名密钥（飞书/钉钉，可选）", text: $model.secret)
-                .textFieldStyle(.roundedBorder)
+            SecretInput(
+                placeholder: "Webhook 地址",
+                emptyText: "未填写（不会推送）",
+                text: $model.webhook
+            )
+            SecretInput(
+                placeholder: "签名密钥（飞书/钉钉，可选）",
+                emptyText: "未填写（可选）",
+                text: $model.secret
+            )
             TextField("自定义关键词（可选）", text: $model.keyword)
                 .textFieldStyle(.roundedBorder)
-            Toggle("启用消息推送（关闭时只记录日志）", isOn: $model.live)
+            Text("Webhook 默认固定显示 10 个圆点，点眼睛或字段可查看/编辑完整内容。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             HStack {
                 Button(model.testing ? "发送中…" : "发送测试消息") { actions.test() }
                     .disabled(model.testing || !model.isWebhookConfigured)
@@ -209,7 +229,24 @@ struct SettingsView: View {
     }
 
     private var scheduleCard: some View {
-        card("定时与自动启停") {
+        card("运行模式与定时") {
+            Picker("运行模式", selection: $model.live) {
+                Text("演练（dry-run）").tag(false)
+                Text("实际执行（live）").tag(true)
+            }
+            .pickerStyle(.segmented)
+            Text("演练：只读取日志、更新菜单和历史；不发送通知，也不自动启停 MAA。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("实际执行：发送通知，并允许自动启停 MAA；未填机器人时只跳过通知。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !model.live && (model.autoStart || model.autoQuit) {
+                Text("当前为演练模式，下面的自动启停不会执行。")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            Divider()
             Text("监控定时").font(.subheadline).fontWeight(.medium)
             ForEach(Array(model.scheduleTimes.enumerated()), id: \.offset) { index, _ in
                 HStack(spacing: 8) {
@@ -270,13 +307,18 @@ struct SettingsView: View {
 
     private var maaCard: some View {
         card("MAA 目录") {
+            Text("默认目录：\(kDefaultMaaDataPath)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
             Text(model.folderPath.isEmpty ? "尚未选择" : model.folderPath)
                 .font(.caption)
                 .textSelection(.enabled)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
             HStack {
-                Button("重新选择…") { actions.chooseFolder() }
+                Button("使用默认目录…") { actions.useDefaultFolder() }
+                Button("选择其他目录…") { actions.chooseFolder() }
                 Button("打开目录") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: model.folderPath))
                 }
@@ -285,11 +327,19 @@ struct SettingsView: View {
                 Button("启动 MAA") { actions.startMAA() }
                 Button("退出 MAA") { actions.quitMAA() }
             }
+            Text("系统会弹出选择框让你授权；默认位置只是初始目录，可选择任意其他 MAA Data 目录。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 
     private var appearanceCard: some View {
-        card("外观") {
+        card("启动与外观") {
+            Toggle("登录时自动启动 MaaNotify", isOn: $model.launchAtLogin)
+            Text("开启后，开机登录桌面时自动运行；关闭后仍可从“应用程序”手动打开。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Divider()
             Picker("菜单栏图标", selection: $model.icon) {
                 ForEach(kIconOptions) { option in
                     Text(option.title).tag(option.id)
@@ -328,6 +378,52 @@ struct SettingsView: View {
     }
 }
 
+struct SecretInput: View {
+    let placeholder: String
+    let emptyText: String
+    @Binding var text: String
+    @State private var reveal = false
+
+    private var trimmed: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if reveal {
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(.roundedBorder)
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "lock.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(trimmed.isEmpty ? emptyText : String(repeating: "•", count: 10))
+                        .foregroundStyle(trimmed.isEmpty ? .secondary : .primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(Color(nsColor: .separatorColor))
+                )
+                .contentShape(Rectangle())
+                .onTapGesture { reveal = true }
+            }
+            Button {
+                reveal.toggle()
+            } label: {
+                Image(systemName: reveal ? "eye.slash" : "eye")
+            }
+            .buttonStyle(.borderless)
+            .help(reveal ? "隐藏" : "显示并编辑")
+        }
+    }
+}
+
 final class SettingsWindowController: NSWindowController {
     init(model: SettingsModel, actions: SettingsActions) {
         let hosting = NSHostingController(
@@ -336,7 +432,7 @@ final class SettingsWindowController: NSWindowController {
         let window = NSWindow(contentViewController: hosting)
         window.title = "MAA 状态监控设置"
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 600, height: 720))
+        window.setContentSize(NSSize(width: 600, height: 760))
         window.minSize = NSSize(width: 560, height: 600)
         window.center()
         window.isReleasedWhenClosed = false

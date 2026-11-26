@@ -21,6 +21,15 @@ let kRuntime = kAppSupport.appendingPathComponent("app/maa_notify.py")
 let kBaseConfig = kAppSupport.appendingPathComponent("app/config.json")
 let kPython = "/usr/bin/python3"
 let kMaaAppPath = "/Applications/MAA.app"
+let kDefaultMaaDataPath = "~/Library/Containers/com.hguandl.MeoAsstMac/Data"
+let kDefaultMaaDataURL = kHome.appendingPathComponent(
+    "Library/Containers/com.hguandl.MeoAsstMac/Data",
+    isDirectory: true
+)
+let kLaunchAgentLabel = "com.jarvan.maa-notify.menu"
+let kLaunchAgentPlist = kHome.appendingPathComponent(
+    "Library/LaunchAgents/\(kLaunchAgentLabel).plist"
+)
 
 let kGuiRelative = "Library/Application Support/debug/gui.log"
 let kAsstRelative = "Library/Application Support/debug/asst.log"
@@ -48,6 +57,26 @@ func writeJSON(_ object: [String: Any], to url: URL) {
     ensureDirectory(url.deletingLastPathComponent())
     try? data.write(to: url, options: .atomic)
     try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+}
+
+func loadPlist(_ url: URL) -> [String: Any]? {
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    return (try? PropertyListSerialization.propertyList(
+        from: data,
+        options: [],
+        format: nil
+    )) as? [String: Any]
+}
+
+func writePlist(_ object: [String: Any], to url: URL) {
+    guard let data = try? PropertyListSerialization.data(
+        fromPropertyList: object,
+        format: .xml,
+        options: 0
+    ) else { return }
+    ensureDirectory(url.deletingLastPathComponent())
+    try? data.write(to: url, options: .atomic)
+    try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
 }
 
 func canReadOneByte(_ url: URL) -> Bool {
@@ -439,25 +468,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return canReadOneByte(gui) && canReadOneByte(tasks)
     }
 
-    private func promptForFolder(after: (() -> Void)? = nil) {
+    private func promptForFolder(
+        preferred: URL? = nil,
+        after: (() -> Void)? = nil
+    ) {
         NSApp.activate(ignoringOtherApps: true)
         let panel = NSOpenPanel()
         panel.title = "选择 MAA Data 目录"
-        panel.message = "请选择 MAA 的 Data 目录。App 只会读取这个目录，不需要“完全磁盘访问权限”。"
+        panel.message = """
+        默认目录：\(kDefaultMaaDataPath)
+        请选择 MAA 的 Data 目录。App 只会读取这个目录，不需要“完全磁盘访问权限”。
+        """
         panel.prompt = "使用此目录"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.directoryURL = kHome.appendingPathComponent(
-            "Library/Containers/com.hguandl.MeoAsstMac/Data",
-            isDirectory: true
-        )
+        let start = preferred ?? kDefaultMaaDataURL
+        panel.directoryURL = FileManager.default.fileExists(atPath: start.path) ? start : kHome
 
         if panel.runModal() == .OK, let selected = panel.url {
             guard let dataURL = normalizeSource(selected), validateSource(dataURL) else {
                 let alert = NSAlert()
-                alert.messageText = "目录不正确"
-                alert.informativeText = "请选择 MAA 的 Data 目录，确保其中包含 Library/Application Support/debug/gui.log 和 DailyTasks/Default.plist。"
+                alert.messageText = "目录不正确或无法读取"
+                alert.informativeText = """
+                请选择 MAA 的 Data 目录，确保其中包含：
+                Library/Application Support/debug/gui.log
+                Library/Application Support/DailyTasks/Default.plist
+
+                默认目录：\(kDefaultMaaDataPath)
+                如果默认目录不可读，请用“选择其他目录…”重新授权。
+                """
                 alert.alertStyle = .warning
                 alert.runModal()
                 return
@@ -572,7 +612,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         var runtime = existing["runtime"] as? [String: Any] ?? [:]
         if runtime["dry_run"] == nil {
-            runtime["dry_run"] = true
+            runtime["dry_run"] = false
         }
         existing["runtime"] = runtime
 
@@ -665,23 +705,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         removePid()
 
         // 兜底：清掉极端情况下残留的菜单栏版 watcher。
-        let pkill = Process()
-        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        pkill.arguments = ["-f", kMenuConfig.path]
-        try? pkill.run()
-        pkill.waitUntilExit()
+        killMenuWatchers()
     }
 
     private func killStaleWatcher() {
-        // 用 pkill 按 config 路径精确清理上一次 app 留下的 watcher。
-        // 手动 watcher 用的是 app/config.json，不会被匹配。
-        let pkill = Process()
-        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        pkill.arguments = ["-f", kMenuConfig.path]
-        try? pkill.run()
-        pkill.waitUntilExit()
+        // 只杀“maa_notify.py + 菜单栏 config”的进程。
+        // 不能只按 config 路径 pkill，否则会误杀命令里恰好包含该路径的终端/脚本。
+        killMenuWatchers()
         usleep(200_000)
         removePid()
+    }
+
+    private func killMenuWatchers() {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-axo", "pid=,command="]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return
+        }
+
+        // 必须先读干 pipe 再等待，否则输出超过 pipe 缓冲区时 ps 会卡死。
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard let output = String(data: data, encoding: .utf8) else { return }
+        let ownPid = getpid()
+        for line in output.split(separator: "\n") {
+            let text = String(line)
+            guard text.contains("maa_notify.py"),
+                  text.contains("--config"),
+                  text.contains(kMenuConfig.path)
+            else { continue }
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard let pidText = trimmed.split(separator: " ", maxSplits: 1).first,
+                  let pid = Int32(pidText),
+                  pid != ownPid
+            else { continue }
+            kill(pid, SIGTERM)
+        }
     }
 
     private func removePid() {
@@ -701,9 +766,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func maybeShowOnboarding() {
         guard !webhookConfigured() else { return }
+        let settings = loadJSON(kSettings) ?? [:]
+        if (settings["onboarding_completed"] as? Bool) == true { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.openSettings()
         }
+    }
+
+    private func loginItemEnabled() -> Bool {
+        guard let plist = loadPlist(kLaunchAgentPlist) else { return false }
+        return (plist["RunAtLoad"] as? Bool) ?? false
+    }
+
+    private func applyLoginItem(_ enabled: Bool) {
+        guard var plist = loadPlist(kLaunchAgentPlist) else { return }
+        plist["RunAtLoad"] = enabled
+        if enabled {
+            plist["KeepAlive"] = ["SuccessfulExit": false]
+        } else {
+            plist.removeValue(forKey: "KeepAlive")
+        }
+        writePlist(plist, to: kLaunchAgentPlist)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = [
+            enabled ? "enable" : "disable",
+            "gui/\(getuid())/\(kLaunchAgentLabel)",
+        ]
+        try? process.run()
+        process.waitUntilExit()
     }
 
     private func makeSettingsModel() -> SettingsModel {
@@ -741,12 +833,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             leadMinutes: (policy["auto_start_lead_minutes"] as? NSNumber)?.intValue ?? 5,
             quitDelay: (policy["auto_quit_delay_seconds"] as? NSNumber)?.intValue ?? 60,
             icon: settings["icon"] as? String ?? iconName,
+            launchAtLogin: loginItemEnabled(),
             scheduleTimes: configuredScheduleList(),
             maaSchedule: readMaaScheduleText(),
             folderPath: folder,
             status: sourceURL == nil
                 ? "还没有选择 MAA 目录。"
-                : "配置保存在本机，Webhook 不会上传。"
+                : (webhookConfigured()
+                    ? "配置保存在本机，Webhook 不会上传。"
+                    : "未配置消息机器人：只更新菜单和日志，不发送通知。")
         )
     }
 
@@ -763,6 +858,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.leadMinutes = fresh.leadMinutes
         model.quitDelay = fresh.quitDelay
         model.icon = fresh.icon
+        model.launchAtLogin = fresh.launchAtLogin
         model.scheduleTimes = fresh.scheduleTimes
         model.maaSchedule = fresh.maaSchedule
         model.folderPath = fresh.folderPath
@@ -782,9 +878,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 save: { [weak self] in self?.saveSettings() },
                 test: { [weak self] in self?.testWebhook() },
                 chooseFolder: { [weak self] in
-                    self?.promptForFolder {
+                    self?.promptForFolder(preferred: self?.sourceURL) {
                         self?.refreshSettingsModel()
                         self?.settingsModel?.status = "MAA 目录已更新。"
+                    }
+                },
+                useDefaultFolder: { [weak self] in
+                    self?.promptForFolder(preferred: kDefaultMaaDataURL) {
+                        self?.refreshSettingsModel()
+                        self?.settingsModel?.status = "已使用默认 MAA 目录。"
                     }
                 },
                 readMAA: { [weak self] in
@@ -818,7 +920,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let webhook = model.webhook.trimmingCharacters(in: .whitespacesAndNewlines)
         let secret = model.secret.trimmingCharacters(in: .whitespacesAndNewlines)
         let keyword = model.keyword.trimmingCharacters(in: .whitespacesAndNewlines)
-        let canLive = !webhook.isEmpty && !webhook.contains("REPLACE_ME")
+        let hasWebhook = !webhook.isEmpty && !webhook.contains("REPLACE_ME")
 
         var base = loadJSON(kBaseConfig) ?? [:]
         var notify = base["notify"] as? [String: Any] ?? [:]
@@ -859,31 +961,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ensureMenuConfig()
         var menu = loadJSON(kMenuConfig) ?? [:]
         var runtime = menu["runtime"] as? [String: Any] ?? [:]
-        runtime["dry_run"] = !(model.live && canLive)
+        runtime["dry_run"] = !model.live
         menu["runtime"] = runtime
         writeJSON(menu, to: kMenuConfig)
 
         iconName = model.icon
-        saveIconSetting()
+        var settings = loadJSON(kSettings) ?? [:]
+        settings["icon"] = model.icon
+        settings["onboarding_completed"] = true
+        writeJSON(settings, to: kSettings)
         applyIcon()
+        applyLoginItem(model.launchAtLogin)
 
         stopWatcher()
         startWatcher()
 
-        if !canLive {
-            model.live = false
-            model.status = "已保存；Webhook 未填写，飞书推送保持关闭。"
+        let status: String
+        if !hasWebhook {
+            status = model.live
+                ? "已保存；未配置机器人，只监控并记录，不发送通知。"
+                : "已保存；演练模式，不发送通知，也不自动启停 MAA。"
         } else {
-            model.status = "已保存并应用。"
+            status = "已保存并应用。"
         }
         refreshSettingsModel()
-        model.status = canLive ? "已保存并应用。" : "已保存；Webhook 未填写，飞书推送保持关闭。"
+        model.status = status
     }
 
     private func testWebhook() {
         guard let model = settingsModel else { return }
         guard model.isWebhookConfigured else {
-            model.status = "请先填写飞书 Webhook。"
+            model.status = "请先填写消息机器人 Webhook。"
             return
         }
         saveSettings()
@@ -904,7 +1012,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.testProcess = nil
                 self?.settingsModel?.testing = false
                 if proc.terminationStatus == 0 {
-                    self?.settingsModel?.status = "测试消息已发送，请查看飞书。"
+                    self?.settingsModel?.status = "测试消息已发送，请查看消息机器人。"
                 } else {
                     let tail = String(output.suffix(240))
                     self?.settingsModel?.status = "测试失败：\(tail)"
@@ -1168,7 +1276,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func saveIconSetting() {
-        writeJSON(["icon": iconName], to: kSettings)
+        var settings = loadJSON(kSettings) ?? [:]
+        settings["icon"] = iconName
+        writeJSON(settings, to: kSettings)
     }
 
     private func statusLabel(_ status: String) -> String {

@@ -293,6 +293,25 @@ class TestAutoControlBehavior(unittest.TestCase):
         self.assertEqual(quit_called, [True])
         self.assertIsNone(watcher.pending_quit_at)
 
+    def test_no_webhook_skips_notification(self):
+        cfg = mn.deep_merge(mn.DEFAULT_CONFIG, {})
+        cfg["notify"]["webhook"] = ""
+        cfg["feishu"]["webhook"] = ""
+        watcher = object.__new__(mn.Watcher)
+        watcher.cfg = cfg
+        watcher.feishu_ready = mn.feishu_configured(cfg)
+        self.assertFalse(watcher._should_notify({"status": "success"}))
+        self.assertFalse(watcher._should_notify({"status": "failed"}))
+
+    def test_no_webhook_still_allows_auto_control(self):
+        watcher = self.fake_watcher()
+        watcher.feishu_ready = False
+        opened = []
+        watcher._maa_running = lambda: False
+        watcher._open_maa = lambda: opened.append(True) or True
+        watcher._check_auto_start(dt("2026-11-24 06:58:00"))
+        self.assertEqual(opened, [True])
+
 
 class TestConfiguredSchedule(unittest.TestCase):
     def test_config_schedule_times_wins(self):
