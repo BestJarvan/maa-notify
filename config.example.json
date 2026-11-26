@@ -1,0 +1,38 @@
+{
+  "feishu": {
+    "webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME",
+    "secret": "",
+    "keyword": "MAA",
+    "notify_on_success": true,
+    "notify_on_partial": true,
+    "notify_on_missed": true
+  },
+  "maa": {
+    "app_path": "/Applications/MAA.app",
+    "gui_log": "~/Library/Containers/com.hguandl.MeoAsstMac/Data/Library/Application Support/debug/gui.log",
+    "asst_log": "~/Library/Containers/com.hguandl.MeoAsstMac/Data/Library/Application Support/debug/asst.log",
+    "asst_bak_log": "~/Library/Containers/com.hguandl.MeoAsstMac/Data/Library/Application Support/debug/asst.bak.log",
+    "interface_dir": "~/Library/Containers/com.hguandl.MeoAsstMac/Data/Library/Application Support/debug/interface",
+    "daily_tasks_plist": "~/Library/Containers/com.hguandl.MeoAsstMac/Data/Library/Application Support/DailyTasks/Default.plist",
+    "schedule_domain": "com.hguandl.MeoAsstMac",
+    "schedule_key": "MAAScheduledDailyTaskTimer",
+    "schedule_plist": "",
+    "fallback_times": ["07:02", "19:01"]
+  },
+  "policy": {
+    "grace_minutes": 30,
+    "idle_timeout_minutes": 15,
+    "hard_timeout_minutes": 180,
+    "poll_seconds": 2,
+    "notify_manual_runs": false,
+    "optional_tasks": [],
+    "include_closedown": false,
+    "auto_start_maa": false,
+    "auto_quit_maa": false,
+    "auto_start_lead_minutes": 5,
+    "auto_quit_delay_seconds": 60
+  },
+  "runtime": {
+    "dry_run": false
+  }
+}

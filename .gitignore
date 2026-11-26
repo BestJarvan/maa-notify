@@ -1,0 +1,21 @@
+# 本地配置（含 Webhook）
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# 菜单栏 App 构建产物
+menuapp/build/
+
+# 运行日志/状态
+*.log
+*.out
+state.json
+runs.jsonl
+mirror-state.json
+
+# macOS
+.DS_Store
