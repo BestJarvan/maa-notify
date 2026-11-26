@@ -1,5 +1,7 @@
-# 本地配置（含 Webhook）
+# 本地配置（含 Webhook / 签名密钥）
 config.json
+config.local.json
+.env
 
 # Python
 __pycache__/
@@ -9,13 +11,18 @@ __pycache__/
 
 # 菜单栏 App 构建产物
 menuapp/build/
+*.dSYM/
 
 # 运行日志/状态
 *.log
 *.out
+*.tmp
+*.bak
 state.json
 runs.jsonl
 mirror-state.json
 
-# macOS
+# 编辑器 / macOS
+.idea/
+.vscode/
 .DS_Store

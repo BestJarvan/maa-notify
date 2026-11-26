@@ -30,6 +30,17 @@ cp -f "$SRC/config.example.json" "$SUPPORT/app/config.example.json" 2>/dev/null 
 cp -f "$SRC/README.md" "$SUPPORT/app/README.md" 2>/dev/null || true
 chmod +x "$SUPPORT/app/maa_notify.py"
 
+# 首次安装必须有一个可编辑的配置；菜单栏 App 会从它同步 feishu 配置。
+if [ ! -f "$SUPPORT/app/config.json" ]; then
+  if [ -f "$SRC/config.json" ]; then
+    cp -f "$SRC/config.json" "$SUPPORT/app/config.json"
+  else
+    cp -f "$SRC/config.example.json" "$SUPPORT/app/config.json"
+  fi
+  chmod 600 "$SUPPORT/app/config.json"
+  echo "已创建 $SUPPORT/app/config.json，请填写 feishu.webhook。"
+fi
+
 # 4. LaunchAgent
 mkdir -p "$HOME/Library/LaunchAgents" "$SUPPORT/menuapp" "$SUPPORT/feed"
 cat > "$PLIST" <<EOF
@@ -68,5 +79,6 @@ echo "菜单栏出现 MAA 图标后，第一次会要求选择 MAA 的 Data 目�
 echo "  ~/Library/Containers/com.hguandl.MeoAsstMac/Data"
 echo
 echo "首次安装默认 dry-run；如果之前已经切换过，会保留现有 runtime 配置。"
+echo "配置文件：$SUPPORT/app/config.json"
 echo "日志：$SUPPORT/menuapp/watcher.log"
 echo "卸载：$SRC/uninstall_menuapp.sh"
